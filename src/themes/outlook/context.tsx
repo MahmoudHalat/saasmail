@@ -9,7 +9,11 @@ import {
 } from "react";
 import type { ComposePrefill } from "@/pages/ComposeModal";
 import { fetchStats } from "@/lib/api";
-import { DEFAULT_FAVORITES, type SwipeAction } from "./lib";
+import {
+  DEFAULT_FAVORITES,
+  LEGACY_DEFAULT_FAVORITES,
+  type SwipeAction,
+} from "./lib";
 
 /**
  * State shared between the Outlook shell (suite header, settings flyout,
@@ -36,6 +40,10 @@ interface LayoutPrefs {
   /** Folder keys pinned to Favorites (see lib.favoriteKey). */
   favorites: string[];
   favoritesOpen: boolean;
+  accountOpen: boolean;
+  inboxesOpen: boolean;
+  /** Folder pane state below 1280px (collapsed by default, like Outlook). */
+  folderPaneOpenNarrow: boolean;
   showAs: ShowAs;
   swipeRight: SwipeAction;
   swipeLeft: SwipeAction;
@@ -53,6 +61,9 @@ const DEFAULT_LAYOUT: LayoutPrefs = {
   quickActions: ALL_QUICK_ACTIONS,
   favorites: DEFAULT_FAVORITES,
   favoritesOpen: true,
+  accountOpen: true,
+  inboxesOpen: true,
+  folderPaneOpenNarrow: false,
   showAs: "conversations",
   swipeRight: "archive",
   swipeLeft: "flag",
@@ -82,10 +93,15 @@ function readLayout(): LayoutPrefs {
       quickActions: Array.isArray(r.quickActions)
         ? r.quickActions.filter((a) => ALL_QUICK_ACTIONS.includes(a))
         : DEFAULT_LAYOUT.quickActions,
-      favorites: Array.isArray(r.favorites)
-        ? r.favorites.filter((f) => typeof f === "string")
-        : DEFAULT_LAYOUT.favorites,
+      favorites:
+        Array.isArray(r.favorites) &&
+        JSON.stringify(r.favorites) !== JSON.stringify(LEGACY_DEFAULT_FAVORITES)
+          ? r.favorites.filter((f) => typeof f === "string")
+          : DEFAULT_LAYOUT.favorites,
       favoritesOpen: r.favoritesOpen !== false,
+      accountOpen: r.accountOpen !== false,
+      inboxesOpen: r.inboxesOpen !== false,
+      folderPaneOpenNarrow: r.folderPaneOpenNarrow === true,
       showAs: r.showAs === "messages" ? "messages" : "conversations",
       swipeRight: swipes.includes(r.swipeRight as SwipeAction)
         ? (r.swipeRight as SwipeAction)
@@ -128,6 +144,8 @@ export interface ComposeState {
 interface OutlookContextValue extends LayoutPrefs {
   setLayout: (patch: Partial<LayoutPrefs>) => void;
   toggleFavorite: (key: string) => void;
+  /** Folder pane open state for the current width (☰ toggles it). */
+  setPaneOpen: (open: boolean) => void;
   /** Our inbox addresses (lower-case), for to: search mapping. */
   knownInboxes: string[];
   isMobile: boolean;
@@ -186,6 +204,16 @@ export function OutlookProvider({
       .catch(() => {});
   }, []);
   const isMobile = useIsMobile();
+  const narrow = useMedia("(max-width: 1279px)");
+  const setPaneOpen = useCallback(
+    (open: boolean) =>
+      setLayoutState((prev) =>
+        narrow
+          ? { ...prev, folderPaneOpenNarrow: open }
+          : { ...prev, folderPaneOpen: open },
+      ),
+    [narrow],
+  );
 
   useEffect(() => {
     try {
@@ -206,6 +234,10 @@ export function OutlookProvider({
   const value = useMemo<OutlookContextValue>(
     () => ({
       ...layout,
+      folderPaneOpen: narrow
+        ? layout.folderPaneOpenNarrow
+        : layout.folderPaneOpen,
+      setPaneOpen,
       setLayout,
       toggleFavorite,
       knownInboxes,
@@ -227,6 +259,8 @@ export function OutlookProvider({
     }),
     [
       layout,
+      narrow,
+      setPaneOpen,
       setLayout,
       toggleFavorite,
       knownInboxes,

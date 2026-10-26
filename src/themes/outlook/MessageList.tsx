@@ -438,14 +438,6 @@ function Row({
             </span>
           </div>
           <div className="flex items-center gap-2">
-            {canExpand && (
-              <span
-                className="ol-row-count"
-                aria-label={`${item.totalCount} messages`}
-              >
-                {item.totalCount}
-              </span>
-            )}
             <span
               className={cn(
                 "min-w-0 flex-1 truncate text-[13px]",
@@ -497,6 +489,8 @@ export default function MessageList({
   const scrollRef = useRef<HTMLDivElement>(null);
   const focusKey =
     mail.cursorKey ?? mail.openKey ?? [...mail.selected][0] ?? null;
+  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+  useEffect(() => setCollapsed(new Set()), [mail.folder, mail.label, mail.q]);
   const [menu, setMenu] = useState<{
     x: number;
     y: number;
@@ -692,8 +686,8 @@ export default function MessageList({
             className="ol-other-hint"
             onClick={() => mail.setFocusTab("other")}
           >
-            <span className="font-semibold">Other:</span> New messages from{" "}
-            {otherNames.join(", ")}
+            <span className="text-text-secondary">Other:</span> New messages
+            from {otherNames.join(", ")}
             {mail.otherUnread.length > otherNames.length ? " and others" : ""}
           </button>
         )}
@@ -738,8 +732,30 @@ export default function MessageList({
               aria-label={g.label}
               data-group={g.label}
             >
-              <div className="ol-group-head">{g.label}</div>
-              {g.items.map((it) => {
+              <button
+                type="button"
+                className="ol-group-head"
+                aria-expanded={!collapsed.has(g.label)}
+                onClick={() =>
+                  setCollapsed((c) => {
+                    const n = new Set(c);
+                    if (n.has(g.label)) n.delete(g.label);
+                    else n.add(g.label);
+                    return n;
+                  })
+                }
+              >
+                <ChevronRight
+                  size={14}
+                  aria-hidden
+                  className={cn(
+                    "ol-chev",
+                    !collapsed.has(g.label) && "ol-chev-open",
+                  )}
+                />
+                {g.label}
+              </button>
+              {(collapsed.has(g.label) ? [] : g.items).map((it) => {
                 const k = itemKey(it);
                 return (
                   <Row

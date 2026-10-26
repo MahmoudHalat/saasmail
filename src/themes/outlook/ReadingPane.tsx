@@ -144,14 +144,16 @@ export default function ReadingPane({
     mode: ReplyMode;
   } | null>(null);
 
-  // Outlook marks a message read when you select it.
+  // Outlook marks a message read when you select it. The conversation it
+  // opens by itself when a folder loads stays unread until you act on it.
+  const autoOpened = !!item && mail.autoKey === `${item.type}:${item.id}`;
   useEffect(() => {
-    if (item && item.unreadCount > 0) {
+    if (item && item.unreadCount > 0 && !autoOpened) {
       const t = setTimeout(() => mail.ops.markRead([item]), 600);
       return () => clearTimeout(t);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [item?.type, item?.id]);
+  }, [item?.type, item?.id, autoOpened]);
 
   if (o.compose) {
     return (

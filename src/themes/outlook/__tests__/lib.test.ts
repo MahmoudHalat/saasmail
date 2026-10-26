@@ -265,7 +265,7 @@ describe("group titles and favorites", () => {
     } as unknown as Extract<GroupedItem, { type: "group" }>;
     expect(groupParticipants(g)).toBe("Vera Wayne; Bob Brown");
   });
-  it("encodes favorites and does not repeat Inbox by default", () => {
+  it("encodes favorites and defaults to Outlook's Inbox / Sent Items / Drafts", () => {
     expect(favoriteKey("inbox", "support@x.test")).toBe("label:support@x.test");
     expect(parseFavorite("label:support@x.test")).toEqual({
       folder: "inbox",
@@ -273,6 +273,6 @@ describe("group titles and favorites", () => {
     });
     expect(parseFavorite("flagged")).toEqual({ folder: "flagged" });
     expect(parseFavorite("bogus")).toBeNull();
-    expect(DEFAULT_FAVORITES).not.toContain("inbox");
+    expect(DEFAULT_FAVORITES).toEqual(["inbox", "sent", "drafts"]);
   });
 });

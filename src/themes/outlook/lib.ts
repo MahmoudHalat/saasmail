@@ -81,12 +81,12 @@ export function folderQuery(id: OlFolderId): {
 // ── Favorites ────────────────────────────────────────────────────────────
 
 /**
- * A favorite is a folder id, or `label:<inbox address>`. Defaults avoid
- * repeating the account's Inbox: Unread mail and Flagged are the two
- * search folders Outlook users add most, and they are not in the account
- * tree, so nothing appears twice until the user adds Inbox themselves.
+ * A favorite is a folder id, or `label:<inbox address>`. Outlook ships
+ * Favorites with Inbox, Sent Items and Drafts, so that is the default.
  */
-export const DEFAULT_FAVORITES = ["unread", "flagged"];
+export const DEFAULT_FAVORITES = ["inbox", "sent", "drafts"];
+/** The pass-2 default, migrated to Outlook's when the user never changed it. */
+export const LEGACY_DEFAULT_FAVORITES = ["unread", "flagged"];
 
 export function favoriteKey(folder: OlFolderId, label?: string): string {
   return label ? `label:${label}` : folder;

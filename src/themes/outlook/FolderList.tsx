@@ -1,7 +1,6 @@
 import { useState } from "react";
 import {
   Archive,
-  ChevronDown,
   ChevronRight,
   Clock,
   FileEdit,
@@ -26,6 +25,7 @@ import {
 } from "./lib";
 import { MenuItem, MenuSeparator, PointMenu } from "./Menu";
 import { FlagGlyph } from "./ui";
+import { useOutlook } from "./context";
 
 export interface FolderTarget {
   folder: OlFolderId;
@@ -163,14 +163,7 @@ function Row({
       <span className="ol-folder-icon" aria-hidden>
         {icon}
       </span>
-      <span
-        className={cn(
-          "min-w-0 flex-1 truncate text-left",
-          count ? "font-semibold" : undefined,
-        )}
-      >
-        {label}
-      </span>
+      <span className="min-w-0 flex-1 truncate text-left">{label}</span>
       {favorite && (
         <Star
           size={12}
@@ -179,12 +172,7 @@ function Row({
         />
       )}
       {!!count && (
-        <span
-          className={cn(
-            "ol-folder-count",
-            accentCount && "font-semibold text-accent",
-          )}
-        >
+        <span className={cn("ol-folder-count", accentCount && "text-accent")}>
           {count}
         </span>
       )}
@@ -213,11 +201,11 @@ function Section({
         aria-expanded={open}
         onClick={() => onOpenChange(!open)}
       >
-        {open ? (
-          <ChevronDown size={14} aria-hidden />
-        ) : (
-          <ChevronRight size={14} aria-hidden />
-        )}
+        <ChevronRight
+          size={16}
+          aria-hidden
+          className={cn("ol-chev", open && "ol-chev-open")}
+        />
         {icon}
         <span className="truncate">{title}</span>
       </button>
@@ -246,8 +234,11 @@ export default function FolderList(props: FolderListProps) {
     onMarkAllRead,
     onDropRows,
   } = props;
-  const [accountOpen, setAccountOpen] = useState(true);
-  const [inboxesOpen, setInboxesOpen] = useState(true);
+  const o = useOutlook();
+  const accountOpen = o.accountOpen;
+  const inboxesOpen = o.inboxesOpen;
+  const setAccountOpen = (v: boolean) => o.setLayout({ accountOpen: v });
+  const setInboxesOpen = (v: boolean) => o.setLayout({ inboxesOpen: v });
   const [menu, setMenu] = useState<{
     x: number;
     y: number;
@@ -292,8 +283,10 @@ export default function FolderList(props: FolderListProps) {
         label={nameOf(t)}
         title={t.label ?? nameOf(t)}
         count={countOf(t)}
-        accentCount={t.folder === "inbox" || t.folder === "unread"}
-        active={is(t)}
+        accentCount
+        active={
+          is(t) && (inFavorites || !favorites.includes(key) || !favoritesOpen)
+        }
         onClick={() => onSelect(t)}
         onContextMenu={(e) => openMenu(e, t)}
         drop={t.label ? undefined : DROPPABLE[t.folder]}

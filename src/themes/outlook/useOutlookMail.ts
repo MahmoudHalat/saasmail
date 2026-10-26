@@ -321,8 +321,29 @@ export function useOutlookMail() {
     [params, setParams, navigate, routeParams.personId],
   );
 
+  // Outlook opens the top conversation when a folder loads, so the reading
+  // pane and ribbon are live. It is not marked read until the user acts.
+  const [autoKey, setAutoKey] = useState<string | null>(null);
+  const autoDoneFor = useRef("");
+  const viewKey = `${folder}|${label ?? ""}|${q}|${focusTab}`;
+  useEffect(() => {
+    if (o.isMobile || popout || o.readingPane === "off" || o.compose) return;
+    if (openKey || selected.size > 0) {
+      autoDoneFor.current = viewKey;
+      return;
+    }
+    if (list.loading || order.length === 0) return;
+    if (autoDoneFor.current === viewKey) return;
+    autoDoneFor.current = viewKey;
+    setAutoKey(order[0]);
+    setCursorKey(order[0]);
+    setOpen(order[0], true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [viewKey, list.loading, order, openKey, o.isMobile, o.readingPane]);
+
   const openItem = useCallback(
     (item: GroupedItem | null, opts?: { replace?: boolean }) => {
+      setAutoKey(null);
       if (item) o.closeCompose();
       setOpen(item ? itemKey(item) : null, opts?.replace);
       if (!item) setSelected(new Set());
@@ -337,6 +358,7 @@ export function useOutlookMail() {
     ) => {
       const key = itemKey(item);
       setCursorKey(key);
+      setAutoKey(null);
       if (e.shiftKey && anchorRef.current) {
         const keys = rangeKeys(order, anchorRef.current, key);
         setSelected(new Set(keys));
@@ -838,6 +860,7 @@ export function useOutlookMail() {
     undoLabel: undoStack[undoStack.length - 1]?.label,
     goFolder,
     setQuery,
+    autoKey,
     expanded,
     toggleExpanded,
   };

@@ -2530,3 +2530,618 @@ button.ol-row-chev:hover {
 .ol-field-row .ol-select {
   max-width: 60%;
 }
+
+/* ──────────────────────────────────────────────────────────────
+   Pass 3: fidelity to new Outlook (Fluent 2)
+   Selawik is Microsoft's open-source (SIL OFL 1.1), Segoe UI
+   metric-compatible font, bundled in public/fonts/selawik/. It stands
+   in for Segoe UI on Macs, Linux and anywhere Segoe UI isn't installed.
+   ──────────────────────────────────────────────────────────── */
+
+@font-face {
+  font-family: "Selawik";
+  src: url("/fonts/selawik/selawik-semilight.woff2") format("woff2");
+  font-weight: 350;
+  font-style: normal;
+  font-display: swap;
+  /* Selawik's ellipsis glyph is broken; let "…" come from the next font. */
+  unicode-range: U+0000-2025, U+2027-FFFF;
+}
+@font-face {
+  font-family: "Selawik";
+  src: url("/fonts/selawik/selawik-regular.woff2") format("woff2");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+  /* Selawik's ellipsis glyph is broken; let "…" come from the next font. */
+  unicode-range: U+0000-2025, U+2027-FFFF;
+}
+@font-face {
+  font-family: "Selawik";
+  src: url("/fonts/selawik/selawik-semibold.woff2") format("woff2");
+  font-weight: 600;
+  font-style: normal;
+  font-display: swap;
+  /* Selawik's ellipsis glyph is broken; let "…" come from the next font. */
+  unicode-range: U+0000-2025, U+2027-FFFF;
+}
+@font-face {
+  font-family: "Selawik";
+  src: url("/fonts/selawik/selawik-bold.woff2") format("woff2");
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+  /* Selawik's ellipsis glyph is broken; let "…" come from the next font. */
+  unicode-range: U+0000-2025, U+2027-FFFF;
+}
+
+:root[data-ui="outlook"] {
+  --sm-font-sans:
+    "Segoe UI Variable Text", "Segoe UI", "Selawik", -apple-system,
+    BlinkMacSystemFont, Roboto, "Helvetica Neue", sans-serif;
+  /* Fluent 2 base type ramp */
+  --ol-t-100: 10px;
+  --ol-t-200: 12px;
+  --ol-t-300: 14px;
+  --ol-t-400: 16px;
+  --ol-t-500: 20px;
+  --ol-lh-200: 16px;
+  --ol-lh-300: 20px;
+  --ol-lh-500: 28px;
+  /* Fluent "colored" command icons (Archive green, Report red, Reply purple) */
+  --ol-icon-green: #107c10;
+  --ol-icon-red: #c50f1f;
+  --ol-icon-purple: #8764b8;
+  --ol-icon-blue: var(--sm-accent);
+}
+:root[data-ui="outlook"][data-mode="dark"] {
+  --ol-icon-green: #54b054;
+  --ol-icon-red: #f1707b;
+  --ol-icon-purple: #b696de;
+}
+:root[data-ui="outlook"] body {
+  font-family: var(--sm-font-sans);
+  font-feature-settings: normal;
+}
+.ol-root,
+.ol-menu,
+.ol-dialog,
+.ol-drawer,
+.ol-sheet,
+.ol-tooltip {
+  font-family: var(--sm-font-sans);
+  font-size: var(--ol-t-300);
+  line-height: var(--ol-lh-300);
+  -webkit-font-smoothing: antialiased;
+}
+/* Fluent System Icons are 1.5px-ish strokes; lucide's default 2px reads heavy. */
+.ol-root svg.lucide,
+.ol-menu svg.lucide,
+.ol-dialog svg.lucide,
+.ol-drawer svg.lucide,
+.ol-sheet svg.lucide {
+  stroke-width: 1.5;
+}
+.font-semibold {
+  font-weight: 600;
+}
+
+/* Tooltip */
+.ol-tooltip {
+  position: fixed;
+  z-index: 90;
+  max-width: 280px;
+  padding: 5px 8px 6px;
+  border-radius: 4px;
+  background: var(--sm-surface);
+  color: var(--sm-ink);
+  box-shadow: var(--sm-sh-md);
+  font-size: var(--ol-t-200);
+  line-height: var(--ol-lh-200);
+  pointer-events: none;
+  animation: ol-fade 0.1s var(--ol-ease);
+}
+
+/* Suite header */
+.ol-suite-brand {
+  font-size: var(--ol-t-400);
+  font-weight: 600;
+}
+.ol-search-input {
+  font-size: var(--ol-t-300);
+}
+
+/* App bar: icon-only like new Outlook */
+.ol-appbar {
+  width: 48px;
+  gap: 4px;
+  padding-top: 4px;
+}
+.ol-appbar-btn {
+  width: 40px;
+  min-height: 40px;
+  border-radius: 4px;
+}
+.ol-appbar-btn svg {
+  width: 20px;
+  height: 20px;
+}
+.ol-appbar-label {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+.ol-appbar-btn-on {
+  background: var(--sm-surface);
+}
+.ol-appbar-btn-on::before {
+  left: -4px;
+  top: 10px;
+  bottom: 10px;
+}
+
+/* Ribbon */
+.ol-ribbon-tabs {
+  height: 36px;
+  padding: 0 6px;
+}
+.ol-ribbon-tab {
+  height: 32px;
+  padding: 0 8px;
+  font-size: var(--ol-t-300);
+  font-weight: 400;
+}
+.ol-ribbon-tab-on {
+  font-weight: 600;
+}
+.ol-ribbon-tab-on::after {
+  left: 8px;
+  right: 8px;
+  height: 2px;
+  bottom: 1px;
+}
+.ol-ribbon-bar {
+  height: 40px;
+  padding: 0 6px 4px;
+  gap: 0;
+}
+.ol-rbtn {
+  height: 32px;
+  gap: 4px;
+  padding: 0 6px;
+  font-size: var(--ol-t-300);
+  font-weight: 400;
+}
+.ol-rbtn svg {
+  width: 20px;
+  height: 20px;
+}
+.ol-rbtn .ol-rbtn-icon + span + svg,
+.ol-rbtn > svg:last-child:not(:first-child) {
+  width: 12px;
+  height: 12px;
+}
+.ol-rbtn-icon {
+  color: var(--sm-ink-2);
+}
+[data-rid="archive"] .ol-rbtn-icon {
+  color: var(--ol-icon-green);
+}
+[data-rid="report"] .ol-rbtn-icon,
+[data-rid="flag"] .ol-rbtn-icon {
+  color: var(--ol-icon-red);
+}
+[data-rid="reply"] .ol-rbtn-icon,
+[data-rid="replyAll"] .ol-rbtn-icon,
+[data-rid="forward"] .ol-rbtn-icon {
+  color: var(--ol-icon-purple);
+}
+[data-rid="move"] .ol-rbtn-icon,
+[data-rid="read"] .ol-rbtn-icon,
+[data-rid="pin"] .ol-rbtn-icon,
+[data-rid="snooze"] .ol-rbtn-icon,
+[data-rid="sweep"] .ol-rbtn-icon,
+[data-rid="allread"] .ol-rbtn-icon {
+  color: var(--ol-icon-blue);
+}
+.ol-rbtn:disabled .ol-rbtn-icon {
+  opacity: 0.45;
+}
+.ol-ribbon-sep {
+  height: 20px;
+  margin: 0 6px;
+  background: var(--sm-line);
+}
+.ol-split {
+  height: 32px;
+  margin-right: 8px;
+}
+.ol-split-main {
+  padding: 0 10px 0 8px;
+  gap: 6px;
+  font-weight: 600;
+  font-size: var(--ol-t-300);
+}
+.ol-split-main svg {
+  width: 20px;
+  height: 20px;
+}
+
+/* Folder pane */
+.ol-folder-pane {
+  width: 240px;
+  padding: 0 4px 0 8px;
+}
+.ol-folder-section + .ol-folder-section {
+  margin-top: 6px;
+}
+.ol-folder-heading {
+  height: 32px;
+  padding: 0 4px;
+  gap: 2px;
+  font-size: var(--ol-t-300);
+  font-weight: 600;
+}
+.ol-folder {
+  height: 32px;
+  gap: 8px;
+  padding: 0 8px 0 24px;
+  font-size: var(--ol-t-300);
+  font-weight: 400;
+}
+.ol-folder-on {
+  font-weight: 600;
+  background: var(--sm-accent-tint);
+}
+.ol-folder-on::before {
+  display: none;
+}
+.ol-folder-icon svg {
+  width: 20px;
+  height: 20px;
+}
+.ol-folder-count {
+  font-size: var(--ol-t-300);
+  font-weight: 400;
+}
+.ol-folders-touch .ol-folder {
+  height: 44px;
+  font-size: var(--ol-t-400);
+}
+.ol-chev {
+  flex-shrink: 0;
+  color: var(--sm-ink-2);
+  transition: transform 0.15s var(--ol-ease);
+}
+.ol-chev-open {
+  transform: rotate(90deg);
+}
+.ol-folder-heading .ol-chev {
+  width: 16px;
+  height: 16px;
+}
+
+/* Message list */
+.ol-list-head {
+  height: 40px;
+}
+.ol-list-head h2 {
+  font-size: var(--ol-t-300);
+  font-weight: 600;
+}
+.ol-pivot {
+  height: 40px;
+}
+.ol-pivot-tab {
+  font-size: var(--ol-t-300);
+  padding: 0 8px;
+}
+.ol-pivot-on::after {
+  left: 8px;
+  right: 8px;
+  bottom: 4px;
+  height: 2px;
+}
+.ol-pivot-count {
+  font-weight: 400;
+  background: transparent;
+  color: var(--sm-accent);
+  padding: 0;
+  min-width: 0;
+  font-size: var(--ol-t-200);
+}
+.ol-other-hint {
+  margin: 0;
+  width: 100%;
+  border-radius: 0;
+  padding: 6px 16px;
+  background: transparent;
+  border-bottom: 1px solid var(--sm-line-soft);
+  color: var(--sm-ink-2);
+  font-size: var(--ol-t-200);
+  line-height: var(--ol-lh-200);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ol-other-hint:hover {
+  background: var(--sm-surface-2);
+  color: var(--sm-accent);
+}
+.ol-group-head {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  width: 100%;
+  height: 32px;
+  padding: 0 8px;
+  font-size: var(--ol-t-300);
+  font-weight: 600;
+  color: var(--sm-ink);
+  text-align: left;
+}
+.ol-group-head:hover {
+  background: var(--sm-surface-2);
+}
+.ol-row {
+  gap: 8px;
+  padding: 8px 12px 8px 2px;
+  border-bottom: 1px solid var(--sm-line-soft);
+  line-height: var(--ol-lh-300);
+}
+.ol-spacious .ol-row {
+  padding-top: 12px;
+  padding-bottom: 12px;
+}
+:root[data-density="compact"] .ol-row {
+  padding-top: 4px;
+  padding-bottom: 4px;
+}
+.ol-row .text-\[14px\],
+.ol-row .text-\[13px\] {
+  font-size: var(--ol-t-300);
+  line-height: var(--ol-lh-300);
+}
+.ol-row-preview,
+.ol-row-preview .text-\[13px\] {
+  font-size: 13px;
+  line-height: 18px;
+}
+.ol-row-time {
+  font-size: var(--ol-t-200) !important;
+  font-weight: 400 !important;
+}
+.ol-row-unread .ol-row-time {
+  color: var(--sm-accent);
+  font-weight: 600 !important;
+}
+.ol-row-unread::before {
+  width: 3px;
+  top: 0;
+  bottom: 0;
+}
+.ol-row-chev {
+  width: 20px;
+  padding-top: 8px;
+}
+.ol-row-avatar {
+  margin-top: 2px;
+}
+.ol-row-icons svg,
+.ol-row-hover svg {
+  width: 16px;
+  height: 16px;
+}
+.ol-row-hover {
+  top: 6px;
+  right: 8px;
+}
+.ol-row-cursor:not(.ol-row-selected) {
+  box-shadow: none;
+}
+.ol-row-selected,
+.ol-row-selected:hover {
+  background: var(--sm-accent-tint);
+}
+.ol-row-inbox {
+  font-size: 11px;
+  line-height: 16px;
+}
+.ol-sub-row {
+  min-height: 32px;
+  padding-left: 62px;
+  font-size: 13px;
+}
+
+/* Reading pane: flat Outlook message stack with thin dividers */
+.ol-reading-head {
+  padding: 16px 20px 8px;
+}
+.ol-subject {
+  font-size: var(--ol-t-500);
+  line-height: var(--ol-lh-500);
+  font-weight: 600;
+}
+.ol-conv {
+  gap: 0;
+  padding: 0 0 24px;
+}
+.ol-msg {
+  border: 0;
+  border-top: 1px solid var(--sm-line-soft);
+  border-radius: 0;
+  padding: 16px 20px;
+  background: var(--sm-surface);
+}
+.ol-conv > .ol-msg:first-of-type {
+  border-top: 0;
+}
+.ol-msg-collapsed {
+  padding: 0;
+  background: var(--sm-surface);
+}
+.ol-msg-collapsed-btn {
+  padding: 10px 20px;
+  border-radius: 0;
+}
+.ol-msg-collapsed-btn:hover {
+  background: var(--sm-surface-2);
+}
+.ol-msg-unread {
+  border-left: 0;
+  box-shadow: inset 3px 0 0 var(--sm-accent);
+}
+.ol-msg-head {
+  gap: 12px;
+}
+.ol-persona-name,
+.ol-msg-head .text-\[14px\] {
+  font-size: var(--ol-t-300);
+  font-weight: 600;
+}
+.ol-msg-recips,
+.ol-msg-head .text-\[12px\] {
+  font-size: var(--ol-t-200);
+  line-height: var(--ol-lh-200);
+}
+.ol-msg-actions .ol-icon-btn svg {
+  width: 20px;
+  height: 20px;
+}
+.ol-msg-actions .ol-icon-btn:nth-child(-n + 3) {
+  color: var(--ol-icon-purple);
+}
+.ol-msg-body {
+  margin: 16px 0 0 52px;
+}
+.ol-mail-html {
+  font-size: var(--ol-t-300);
+  line-height: var(--ol-lh-300);
+}
+.ol-reply-card {
+  margin: 0 16px 12px;
+}
+.ol-cat {
+  font-size: var(--ol-t-200);
+  line-height: 18px;
+  height: 20px;
+}
+
+/* Menus */
+.ol-menu {
+  font-size: var(--ol-t-300);
+  border-radius: 6px;
+}
+.ol-menu-item {
+  min-height: 32px;
+  font-weight: 400;
+}
+.ol-menu-icon svg {
+  width: 16px;
+  height: 16px;
+}
+
+/* Empty / illustration */
+.ol-reading-empty p:first-of-type {
+  font-size: var(--ol-t-400);
+  font-weight: 600;
+}
+/* Favorites star only on hover (Outlook's "Add to Favorites" affordance) */
+.ol-folder-fav-star {
+  visibility: hidden;
+}
+.ol-folder:hover .ol-folder-fav-star {
+  visibility: visible;
+}
+/* Quick actions only on hover / keyboard focus, as in Outlook */
+.ol-row-selected:not(:hover) .ol-row-hover {
+  display: none;
+}
+.ol-row-selected:not(:hover) .ol-row-icons {
+  visibility: visible;
+}
+
+/* Mobile: Outlook iOS — the Focused/Other switch and Filter sit in the
+   brand-coloured header, rows are tighter, sender 15 / subject 14 / preview 13. */
+.ol-mobile .ol-m-header {
+  height: 48px;
+}
+.ol-mobile .ol-m-title {
+  font-size: 20px;
+  font-weight: 600;
+}
+.ol-m-mail .ol-m-toolbar {
+  height: 44px;
+  background: var(--chrome-bg);
+  border-bottom: 0;
+  padding: 0 12px 8px;
+}
+.ol-m-mail .ol-m-seg {
+  background: rgb(255 255 255 / 0.18);
+  padding: 2px;
+}
+.ol-m-mail .ol-m-seg-btn {
+  height: 30px;
+  padding: 0 14px;
+  color: var(--chrome-fg);
+  font-size: 14px;
+}
+.ol-m-mail .ol-m-seg-on {
+  background: var(--sm-surface);
+  color: var(--sm-ink);
+  font-weight: 600;
+  box-shadow: none;
+}
+.ol-m-mail .ol-m-filter {
+  color: var(--chrome-fg);
+  font-size: 15px;
+}
+.ol-m-mail .ol-m-filter-on {
+  background: rgb(255 255 255 / 0.2);
+  color: var(--chrome-fg);
+}
+.ol-m-mail .ol-filter-chip {
+  background: rgb(255 255 255 / 0.2);
+  color: var(--chrome-fg);
+}
+.ol-m-seg-dot {
+  background: var(--chrome-fg);
+}
+.ol-m-row {
+  gap: 12px;
+  padding: 10px 16px 10px 22px;
+}
+.ol-m-row .text-\[16px\] {
+  font-size: 15px;
+  line-height: 20px;
+}
+.ol-m-row .text-\[14px\] {
+  font-size: 14px;
+  line-height: 19px;
+}
+.ol-m-row .text-\[13px\] {
+  font-size: 12px;
+}
+.ol-m-row .ol-avatar {
+  width: 36px !important;
+  height: 36px !important;
+  font-size: 14px !important;
+}
+.ol-m-preview {
+  font-size: 13px;
+  line-height: 18px;
+}
+.ol-m-dot {
+  left: 8px;
+  top: 24px;
+}
+.ol-tab {
+  font-size: 10px;
+}
+.ol-tab svg {
+  width: 24px;
+  height: 24px;
+}

@@ -25,6 +25,7 @@ import { SHORTCUT_HELP, parseFolder } from "./lib";
 import { markFolderRead } from "./folderOps";
 import { Menu, MenuContent, MenuItem, MenuTrigger } from "./Menu";
 import { Avatar, IconButton } from "./ui";
+import Tooltips from "./Tooltips";
 import "./outlook.css";
 
 export function isInboxPath(pathname: string): boolean {
@@ -388,6 +389,7 @@ function ShellFrame({ children }: { children: React.ReactNode }) {
         <SettingsPanel />
       </div>
       <ShortcutsDialog />
+      <Tooltips />
     </div>
   );
 }

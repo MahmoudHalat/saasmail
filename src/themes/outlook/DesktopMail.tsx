@@ -273,7 +273,7 @@ export default function DesktopMail({ mail }: { mail: OutlookMail }) {
             {folderOverlay && (
               <div
                 className="ol-folder-scrim"
-                onClick={() => o.setLayout({ folderPaneOpen: false })}
+                onClick={() => o.setPaneOpen(false)}
                 aria-hidden
               />
             )}
@@ -290,7 +290,7 @@ export default function DesktopMail({ mail }: { mail: OutlookMail }) {
                 current={{ folder: mail.urlFolder, label: mail.label }}
                 onSelect={(t) => {
                   mail.goFolder(t);
-                  if (narrow) o.setLayout({ folderPaneOpen: false });
+                  if (narrow) o.setPaneOpen(false);
                 }}
                 onOutbox={() => navigate("/outbox")}
                 favorites={o.favorites}

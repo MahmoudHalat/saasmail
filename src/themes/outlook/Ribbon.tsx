@@ -229,7 +229,7 @@ export default function Ribbon({
   const home: RibbonItem[] = [
     {
       id: "delete",
-      width: 82,
+      width: 76,
       compact: 40,
       separatorBefore: true,
       node: (
@@ -253,7 +253,7 @@ export default function Ribbon({
     },
     {
       id: "archive",
-      width: 86,
+      width: 80,
       compact: 40,
       node: (
         <RBtn
@@ -276,7 +276,7 @@ export default function Ribbon({
     },
     {
       id: "report",
-      width: 92,
+      width: 88,
       node: (
         <RMenuBtn
           icon={<ShieldAlert size={18} />}
@@ -303,7 +303,7 @@ export default function Ribbon({
     },
     {
       id: "sweep",
-      width: 84,
+      width: 74,
       node: (
         <RBtn
           icon={<Brush size={18} />}
@@ -323,7 +323,7 @@ export default function Ribbon({
     },
     {
       id: "move",
-      width: 100,
+      width: 96,
       node: (
         <RMenuBtn
           icon={<FolderInput size={18} />}
@@ -378,7 +378,7 @@ export default function Ribbon({
     },
     {
       id: "reply",
-      width: 76,
+      width: 66,
       compact: 40,
       separatorBefore: true,
       node: (
@@ -402,7 +402,7 @@ export default function Ribbon({
     },
     {
       id: "replyAll",
-      width: 94,
+      width: 84,
       compact: 40,
       node: (
         <RBtn
@@ -425,7 +425,7 @@ export default function Ribbon({
     },
     {
       id: "forward",
-      width: 90,
+      width: 82,
       compact: 40,
       node: (
         <RBtn
@@ -448,7 +448,7 @@ export default function Ribbon({
     },
     {
       id: "read",
-      width: 116,
+      width: 82,
       compact: 40,
       separatorBefore: true,
       node: (
@@ -475,7 +475,7 @@ export default function Ribbon({
     },
     {
       id: "flag",
-      width: 72,
+      width: 62,
       compact: 40,
       node: (
         <RBtn
@@ -499,7 +499,7 @@ export default function Ribbon({
     },
     {
       id: "pin",
-      width: 64,
+      width: 54,
       compact: 40,
       node: (
         <RBtn
@@ -525,7 +525,7 @@ export default function Ribbon({
     },
     {
       id: "snooze",
-      width: 96,
+      width: 90,
       node: (
         <RMenuBtn icon={<Clock size={18} />} label="Snooze" disabled={none}>
           <SnoozeMenuItems
@@ -548,7 +548,7 @@ export default function Ribbon({
     },
     {
       id: "undo",
-      width: 70,
+      width: 64,
       compact: 40,
       separatorBefore: true,
       node: (
@@ -575,7 +575,7 @@ export default function Ribbon({
     },
     {
       id: "allread",
-      width: 140,
+      width: 132,
       node: (
         <RBtn
           icon={<MailCheck size={18} />}
@@ -594,7 +594,7 @@ export default function Ribbon({
     },
     {
       id: "filter",
-      width: 92,
+      width: 80,
       node: (
         <RMenuBtn
           icon={<Filter size={18} />}
@@ -688,13 +688,13 @@ export default function Ribbon({
           icon={<LayoutList size={18} />}
           label="Folder pane"
           pressed={o.folderPaneOpen}
-          onClick={() => o.setLayout({ folderPaneOpen: !o.folderPaneOpen })}
+          onClick={() => o.setPaneOpen(!o.folderPaneOpen)}
         />
       ),
       menu: (
         <MenuCheckboxItem
           checked={o.folderPaneOpen}
-          onCheckedChange={(v) => o.setLayout({ folderPaneOpen: !!v })}
+          onCheckedChange={(v) => o.setPaneOpen(!!v)}
         >
           Folder pane
         </MenuCheckboxItem>
@@ -770,8 +770,41 @@ export default function Ribbon({
     }
     return n;
   };
-  const tight = fitWith(false) < items.length;
-  const fit = fitWith(tight);
+  // Outlook keeps labels on the main commands as long as they fit, sending
+  // Undo / Mark all as read / Filter to "…" first; only then icon-only.
+  const CORE = new Set([
+    "delete",
+    "archive",
+    "report",
+    "sweep",
+    "move",
+    "reply",
+    "replyAll",
+    "forward",
+    "read",
+    "flag",
+    "pin",
+    "snooze",
+  ]);
+  const coreCount = items.filter((i) => CORE.has(i.id)).length;
+  // Estimates can be off with real fonts: if the bar still overflows after
+  // render, drop one more item (and repeat) until it fits.
+  const [cut, setCut] = useState(0);
+  useLayoutEffect(() => setCut(0), [room, tab]);
+  // Labelled layout first; once the main commands no longer fit with
+  // labels, switch to icon-only and keep cutting from the end if needed.
+  const labelled = fitWith(false) - cut;
+  const tight = tab === "home" && labelled < coreCount;
+  const tightCut = Math.max(
+    0,
+    cut - Math.max(0, fitWith(false) - coreCount + 1),
+  );
+  const fit = Math.max(0, tight ? fitWith(true) - tightCut : labelled);
+  useLayoutEffect(() => {
+    const el = barRef.current;
+    if (el && el.scrollWidth > el.clientWidth + 1 && fit > 0)
+      setCut((c) => c + 1);
+  });
   const shown = items.slice(0, fit);
   const overflow = items.slice(fit);
 
@@ -788,7 +821,7 @@ export default function Ribbon({
             o.folderPaneOpen ? "Hide navigation pane" : "Show navigation pane"
           }
           aria-expanded={o.folderPaneOpen}
-          onClick={() => o.setLayout({ folderPaneOpen: !o.folderPaneOpen })}
+          onClick={() => o.setPaneOpen(!o.folderPaneOpen)}
         >
           <MenuIcon size={18} />
         </button>
@@ -841,7 +874,7 @@ export default function Ribbon({
           </div>
         )}
         {shown.map((it) => (
-          <span key={it.id} className="contents">
+          <span key={it.id} className="contents" data-rid={it.id}>
             {it.separatorBefore && (
               <span className="ol-ribbon-sep" aria-hidden />
             )}
