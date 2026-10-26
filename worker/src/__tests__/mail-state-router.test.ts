@@ -299,3 +299,21 @@ describe("grouped list filters for the mail layouts", () => {
     });
   });
 });
+
+describe("categorize", () => {
+  it("follows bulk and notification inboxes only when every inbox agrees", async () => {
+    const { categorize } = await import("../routers/people-router");
+    expect(categorize(["ann@acme.test"], false, ["newsletter@us.com"])).toBe(
+      "promotions",
+    );
+    expect(categorize(["ann@acme.test"], false, ["notifications@us.com"])).toBe(
+      "updates",
+    );
+    expect(
+      categorize(["ann@acme.test"], false, [
+        "newsletter@us.com",
+        "support@us.com",
+      ]),
+    ).toBe("primary");
+  });
+});

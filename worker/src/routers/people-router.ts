@@ -140,9 +140,17 @@ const AUTOMATED_LOCAL =
  * Promotions, social networks are Social, automated senders are Updates,
  * and everything else — real people — is Primary.
  */
+const BULK_INBOX_LOCAL =
+  /^(newsletters?|marketing|promo(tions)?|news|digest)$/i;
+const UPDATES_INBOX_LOCAL =
+  /^(notifications?|alerts?|billing|receipts?|invoices?|status|system|no-?reply)$/i;
+
 export function categorize(
   senderEmails: string[],
   hasListUnsubscribe: boolean,
+  /** Our inboxes the row's mail went to; a row only ever seen by a
+   *  newsletter@ or notifications@ style inbox follows that inbox. */
+  inboxes: string[] = [],
 ): MailCategory {
   const domains = senderEmails.map((e) =>
     e.slice(e.lastIndexOf("@") + 1).toLowerCase(),
@@ -155,6 +163,11 @@ export function categorize(
     return "social";
   if (hasListUnsubscribe) return "promotions";
   if (senderEmails.some((e) => AUTOMATED_LOCAL.test(e.split("@")[0] ?? "")))
+    return "updates";
+  const locals = inboxes.map((i) => i.split("@")[0] ?? "");
+  if (locals.length > 0 && locals.every((l) => BULK_INBOX_LOCAL.test(l)))
+    return "promotions";
+  if (locals.length > 0 && locals.every((l) => UPDATES_INBOX_LOCAL.test(l)))
     return "updates";
   return "primary";
 }
@@ -606,11 +619,10 @@ peopleRouter.openapi(listGroupedPeopleRoute, async (c) => {
   for (const r of merged) {
     r.category =
       r.type === "person"
-        ? categorize([r.email], promoPeople.has(r.id))
-        : // Group senders are hydrated after paging; bulk headers decide.
-          promoConvs.has(r.id)
-          ? "promotions"
-          : "primary";
+        ? categorize([r.email], promoPeople.has(r.id), r.recipients)
+        : // Group senders are hydrated after paging; headers and the
+          // inbox decide.
+          categorize([], promoConvs.has(r.id), [r.inbox]);
   }
   if (category) merged = merged.filter((r) => r.category === category);
   if (attachmentsOnly) merged = merged.filter((r) => r.hasAttachment === 1);
