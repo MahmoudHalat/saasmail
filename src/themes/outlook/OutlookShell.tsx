@@ -22,6 +22,7 @@ import SuiteHeader, { doSignOut, useAppLinks } from "./SuiteHeader";
 import SettingsPanel, { SettingsBody } from "./SettingsPanel";
 import FolderList, { folderHref } from "./FolderList";
 import { SHORTCUT_HELP, parseFolder } from "./lib";
+import { markFolderRead } from "./folderOps";
 import { Menu, MenuContent, MenuItem, MenuTrigger } from "./Menu";
 import { Avatar, IconButton } from "./ui";
 import "./outlook.css";
@@ -114,9 +115,14 @@ function ShortcutsDialog() {
           <Dialog.Description className="pb-3 text-[13px] text-text-secondary">
             Outlook shortcuts. On a Mac use ⌘ for Ctrl.
           </Dialog.Description>
-          <dl className="grid grid-cols-[1fr_auto] gap-x-6 gap-y-2 text-[14px]">
-            {SHORTCUT_HELP.map((s) => (
-              <div key={s.keys} className="contents">
+          <dl className="grid max-h-[60dvh] grid-cols-[1fr_auto] gap-x-6 gap-y-2 overflow-y-auto text-[14px]">
+            {SHORTCUT_HELP.map((s, i) => (
+              <div key={s.group + s.keys} className="contents">
+                {(i === 0 || SHORTCUT_HELP[i - 1].group !== s.group) && (
+                  <h3 className="col-span-2 mt-2 text-[13px] font-semibold text-text-secondary">
+                    {s.group}
+                  </h3>
+                )}
                 <dt className="text-text-primary">{s.label}</dt>
                 <dd>
                   <kbd className="ol-kbd">{s.keys}</kbd>
@@ -132,7 +138,8 @@ function ShortcutsDialog() {
 
 /** Mobile folder drawer (avatar button in the header opens it). */
 function MobileDrawer() {
-  const { drawerOpen, setDrawerOpen, setMobileSearchOpen } = useOutlook();
+  const o = useOutlook();
+  const { drawerOpen, setDrawerOpen, setMobileSearchOpen } = o;
   const navigate = useNavigate();
   const [params] = useSearchParams();
   const { pathname } = useLocation();
@@ -204,7 +211,18 @@ function MobileDrawer() {
                   stats={stats}
                   accountEmail={session?.user?.email ?? ""}
                   current={current}
-                  showFavorites={false}
+                  touch
+                  favorites={o.favorites}
+                  favoritesOpen={o.favoritesOpen}
+                  onFavoritesOpen={(v) => o.setLayout({ favoritesOpen: v })}
+                  onToggleFavorite={o.toggleFavorite}
+                  onMarkAllRead={(t) =>
+                    void markFolderRead(t).then(() =>
+                      fetchStats()
+                        .then(setStats)
+                        .catch(() => {}),
+                    )
+                  }
                   onSelect={(t) => {
                     setDrawerOpen(false);
                     setMobileSearchOpen(false);

@@ -19,6 +19,7 @@ import type { ReplyMode } from "./InlineReply";
 import { Menu, MenuContent, MenuTrigger } from "./Menu";
 import { rowSubject } from "./MessageList";
 import { SnoozeMenuItems } from "./Snooze";
+import { useMailUi } from "./actions";
 import { useConversation, useIdentities } from "./useConversation";
 import type { OutlookMail } from "./useOutlookMail";
 import { Avatar, FlagGlyph } from "./ui";
@@ -38,14 +39,10 @@ function EmptyReading() {
   );
 }
 
-function MultiSelected({
-  mail,
-  onSnoozeCustom,
-}: {
-  mail: OutlookMail;
-  onSnoozeCustom: () => void;
-}) {
+function MultiSelected({ mail }: { mail: OutlookMail }) {
+  const ui = useMailUi();
   const items = mail.selectedItems;
+  const onSnoozeCustom = () => ui.requestSnooze(items);
   const anyUnread = items.some((i) => i.unreadCount > 0);
   return (
     <div className="ol-reading-empty">
@@ -132,11 +129,9 @@ function MultiSelected({
 
 export default function ReadingPane({
   mail,
-  onSnoozeCustom,
   onBack,
 }: {
   mail: OutlookMail;
-  onSnoozeCustom: () => void;
   /** Shown when the reading pane replaces the list (pane "off"). */
   onBack?: () => void;
 }) {
@@ -173,7 +168,7 @@ export default function ReadingPane({
   if (mail.selected.size > 1) {
     return (
       <div className="ol-reading">
-        <MultiSelected mail={mail} onSnoozeCustom={onSnoozeCustom} />
+        <MultiSelected mail={mail} />
       </div>
     );
   }

@@ -9,6 +9,8 @@ import {
   Forward,
   Inbox as InboxIcon,
   ListFilter as ListFilterIcon,
+  Users,
+  FolderInput,
   Mail,
   MailOpen,
   MoreHorizontal,
@@ -45,19 +47,34 @@ import {
   MenuSubTrigger,
   MenuTrigger,
 } from "./Menu";
-import { EmptyFolder, ShimmerRows, rowSubject } from "./MessageList";
+import { EmptyFolder, ShimmerRows, rowSubject, rowTitle } from "./MessageList";
+import { useMailUi } from "./actions";
+import ActionSheet from "./ActionSheet";
+import { snoozePresets } from "@/hooks/useMailList";
 import { SnoozeDialog, SnoozeMenuItems } from "./Snooze";
 import {
   FILTER_LABELS,
+  SWIPE_LABELS,
   formatMobileTime,
   swipeOutcome,
   type ListFilter,
+  type SwipeAction,
 } from "./lib";
 import { useConversation, useIdentities } from "./useConversation";
 import type { OutlookMail } from "./useOutlookMail";
 import { Avatar, FlagGlyph, IconButton } from "./ui";
 
 // ── Swipeable row ────────────────────────────────────────────────────────
+
+const SWIPE_ICONS: Record<SwipeAction, React.ReactNode> = {
+  archive: <Archive size={22} />,
+  delete: <Trash2 size={22} />,
+  flag: <FlagGlyph size={22} filled />,
+  read: <MailOpen size={22} />,
+  snooze: <Clock size={22} />,
+  move: <FolderInput size={22} />,
+  none: null,
+};
 
 function MobileRow({
   item,
@@ -87,7 +104,12 @@ function MobileRow({
   const rowRef = useRef<HTMLDivElement>(null);
   const suppressClick = useRef(false);
   const unread = item.unreadCount > 0;
-  const title = itemTitle(item);
+  const title = rowTitle(item);
+  const inboxName =
+    item.type === "group"
+      ? mail.list.stats?.senderIdentities.find((s) => s.email === item.inbox)
+          ?.displayName || item.inbox
+      : null;
   const width = rowRef.current?.clientWidth ?? 390;
   const outcome = swipeOutcome(dx, width);
 
@@ -97,34 +119,83 @@ function MobileRow({
     g.current = null;
   };
 
-  function finishSwipe(finalDx: number) {
-    const out = swipeOutcome(finalDx, width);
-    setAnimating(true);
-    if (out === "archive") {
+  const o = useOutlook();
+  const ui = useMailUi();
+  const side = dx > 0 ? "right" : "left";
+  const action: SwipeAction = dx > 0 ? o.swipeRight : o.swipeLeft;
+  const swipeLabel = (act: SwipeAction) =>
+    act === "flag"
+      ? item.starred
+        ? "Unflag"
+        : "Flag"
+      : act === "read"
+        ? unread
+          ? "Read"
+          : "Unread"
+        : act === "move"
+          ? "Move"
+          : SWIPE_LABELS[act];
+
+  /** Run a swipe action; actions that remove the row animate it out. */
+  function runSwipe(act: SwipeAction) {
+    const removes =
+      act === "archive" || act === "delete"
+        ? mail.folder !== "archive" || act === "delete"
+        : false;
+    if (removes && act === "archive") {
       setLeaving(true);
-      setDx(width);
-      setTimeout(() => {
-        mail.ops.archive([item]);
-      }, 180);
+      setDx(width * (side === "right" ? 1 : -1));
+      setTimeout(() => mail.ops.archive([item]), 180);
       return;
     }
     setDx(0);
     setTimeout(() => setAnimating(false), 200);
-    if (out === "flag") {
-      const v = !item.starred;
-      mail.ops.flag([item], v);
-      showToast({
-        kind: "info",
-        message: v ? "Flagged" : "Flag removed",
-        action: {
-          label: "Undo",
-          onClick: (dismiss) => {
-            dismiss();
-            mail.ops.flag([item], !v);
+    switch (act) {
+      case "delete":
+        void mail.ops.delete([item]);
+        return;
+      case "archive":
+        mail.ops.archive([item]);
+        return;
+      case "flag": {
+        const v = !item.starred;
+        mail.ops.flag([item], v);
+        showToast({
+          kind: "info",
+          message: v ? "Flagged" : "Flag removed",
+          action: {
+            label: "Undo",
+            onClick: (dismiss) => {
+              dismiss();
+              mail.ops.flag([item], !v);
+            },
           },
-        },
-      });
+        });
+        return;
+      }
+      case "read":
+        mail.ops.toggleRead([item]);
+        return;
+      case "snooze":
+        ui.requestSnooze([item]);
+        return;
+      case "move":
+        ui.requestMove([item]);
+        return;
     }
+  }
+
+  function finishSwipe(finalDx: number) {
+    const out = swipeOutcome(finalDx, width);
+    setAnimating(true);
+    const act =
+      out === "right" ? o.swipeRight : out === "left" ? o.swipeLeft : "none";
+    if (act === "none") {
+      setDx(0);
+      setTimeout(() => setAnimating(false), 200);
+      return;
+    }
+    runSwipe(act);
   }
 
   return (
@@ -133,25 +204,24 @@ function MobileRow({
       data-testid="ol-m-row"
       data-key={itemKey(item)}
     >
-      {dx !== 0 && (
+      {dx !== 0 && action !== "none" && (
         <div
           className={cn(
             "ol-m-swipe-bg",
-            dx > 0 ? "ol-m-swipe-archive" : "ol-m-swipe-flag",
+            `ol-m-swipe-${action}`,
             outcome && "ol-m-swipe-armed",
           )}
           aria-hidden
         >
-          {dx > 0 ? (
-            <span className="flex items-center gap-2">
-              <Archive size={22} /> Archive
-            </span>
-          ) : (
-            <span className="ml-auto flex items-center gap-2">
-              {item.starred ? "Unflag" : "Flag"}
-              <FlagGlyph size={22} filled />
-            </span>
-          )}
+          <span
+            className={cn(
+              "flex items-center gap-2",
+              side === "left" && "ml-auto flex-row-reverse",
+            )}
+          >
+            {SWIPE_ICONS[action]}
+            {swipeLabel(action)}
+          </span>
         </div>
       )}
       <div
@@ -256,6 +326,14 @@ function MobileRow({
             >
               {selected && <Check size={18} strokeWidth={3} />}
             </span>
+          ) : item.type === "group" ? (
+            <span
+              className="ol-avatar ol-avatar-group"
+              style={{ width: 40, height: 40 }}
+              aria-hidden
+            >
+              <Users size={18} />
+            </span>
           ) : (
             <Avatar name={title} seed={title} size={40} />
           )}
@@ -304,7 +382,12 @@ function MobileRow({
               )}
             </span>
           </div>
-          <p className="ol-m-preview">{item.snippet || " "}</p>
+          <p className="ol-m-preview">
+            {item.type === "group" && (
+              <span className="ol-row-inbox mr-1.5">{inboxName}</span>
+            )}
+            {item.snippet || "\u00a0"}
+          </p>
         </div>
       </div>
     </div>
@@ -316,8 +399,17 @@ function MobileRow({
 function MobileSearch({ mail }: { mail: OutlookMail }) {
   const o = useOutlook();
   const navigate = useNavigate();
-  const [q, setQ] = useState(mail.q);
-  const [hits, setHits] = useState<GroupedItem[]>([]);
+  const [q, setQ] = useState(mail.parsed.text);
+  const [chips, setChips] = useState<{
+    unread: boolean;
+    flagged: boolean;
+    files: boolean;
+  }>({
+    unread: false,
+    flagged: false,
+    files: false,
+  });
+  const [hits, setHits] = useState<GroupedItem[] | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => inputRef.current?.focus(), []);
@@ -326,19 +418,37 @@ function MobileSearch({ mail }: { mail: OutlookMail }) {
     const t = setTimeout(
       () =>
         fetchGroupedPeople({
-          folder: q.trim() ? "all" : "inbox",
+          folder: chips.flagged ? "starred" : q.trim() ? "all" : "inbox",
           q: q.trim() || undefined,
-          limit: 12,
+          unread: chips.unread || undefined,
+          hasAttachment: chips.files || undefined,
+          limit: 20,
         })
           .then((r) => !cancelled && setHits(r.data))
-          .catch(() => {}),
+          .catch(() => !cancelled && setHits([])),
       q.trim() ? 200 : 0,
     );
     return () => {
       cancelled = true;
       clearTimeout(t);
     };
-  }, [q]);
+  }, [q, chips]);
+
+  const searching = !!q.trim() || chips.unread || chips.flagged || chips.files;
+  const people = (hits ?? []).filter((h) => h.type === "person").slice(0, 4);
+  const submitQuery = () => {
+    const parts = [q.trim()];
+    if (chips.unread) parts.push("isread:no");
+    if (chips.flagged) parts.push("isflagged:yes");
+    if (chips.files) parts.push("hasattachments:yes");
+    const full = parts.filter(Boolean).join(" ");
+    o.setMobileSearchOpen(false);
+    navigate(full ? `/?q=${encodeURIComponent(full)}` : "/");
+  };
+  const open = (h: GroupedItem) => {
+    o.setMobileSearchOpen(false);
+    navigate(`/?open=${h.type}:${encodeURIComponent(h.id)}`);
+  };
 
   return (
     <div className="ol-m-sheet ol-m-search" role="dialog" aria-label="Search">
@@ -346,8 +456,7 @@ function MobileSearch({ mail }: { mail: OutlookMail }) {
         className="ol-m-search-bar"
         onSubmit={(e) => {
           e.preventDefault();
-          o.setMobileSearchOpen(false);
-          navigate(q.trim() ? `/?q=${encodeURIComponent(q.trim())}` : "/");
+          submitQuery();
         }}
       >
         <div className="ol-m-search-field">
@@ -356,7 +465,7 @@ function MobileSearch({ mail }: { mail: OutlookMail }) {
             ref={inputRef}
             value={q}
             onChange={(e) => setQ(e.target.value)}
-            placeholder="Search"
+            placeholder="Search mail and people"
             aria-label="Search mail and people"
             enterKeyHint="search"
             className="min-w-0 flex-1 bg-transparent text-[16px] text-text-primary outline-none placeholder:text-text-secondary"
@@ -380,47 +489,95 @@ function MobileSearch({ mail }: { mail: OutlookMail }) {
           Cancel
         </button>
       </form>
+      <div className="ol-m-chips" role="toolbar" aria-label="Filters">
+        {(
+          [
+            ["unread", "Unread", <MailOpen key="u" size={14} />],
+            ["flagged", "Flagged", <FlagGlyph key="f" size={14} />],
+            ["files", "Attachments", <Paperclip key="a" size={14} />],
+          ] as const
+        ).map(([k, label, icon]) => (
+          <button
+            key={k}
+            type="button"
+            aria-pressed={chips[k]}
+            className={cn("ol-m-chip", chips[k] && "ol-m-chip-on")}
+            onClick={() => setChips((c) => ({ ...c, [k]: !c[k] }))}
+          >
+            {icon}
+            {label}
+          </button>
+        ))}
+      </div>
       <div className="min-h-0 flex-1 overflow-y-auto">
+        {searching && people.length > 0 && (
+          <>
+            <div className="ol-m-section-label">People</div>
+            <div className="ol-m-people">
+              {people.map((h) => (
+                <button
+                  key={itemKey(h)}
+                  type="button"
+                  className="ol-m-person"
+                  onClick={() =>
+                    h.type === "person"
+                      ? (o.setMobileSearchOpen(false),
+                        navigate(
+                          `/?q=${encodeURIComponent(`from:${h.email}`)}`,
+                        ))
+                      : open(h)
+                  }
+                >
+                  <Avatar name={itemTitle(h)} seed={itemTitle(h)} size={48} />
+                  <span className="w-full truncate text-[13px] text-text-primary">
+                    {itemTitle(h).split(" ")[0]}
+                  </span>
+                </button>
+              ))}
+            </div>
+          </>
+        )}
         <div className="ol-m-section-label">
-          {q.trim() ? "Top results" : "Recent"}
+          {searching ? "Top results" : "Recent"}
         </div>
-        {hits.map((h) => (
+        {hits === null && <ShimmerRows mobile count={3} />}
+        {hits?.length === 0 && (
+          <p className="px-4 py-6 text-center text-[15px] text-text-secondary">
+            No results
+          </p>
+        )}
+        {hits?.map((h) => (
           <button
             key={itemKey(h)}
             type="button"
             className="ol-m-hit"
-            onClick={() => {
-              o.setMobileSearchOpen(false);
-              navigate(`/?open=${h.type}:${encodeURIComponent(h.id)}`);
-            }}
+            onClick={() => open(h)}
           >
-            <Avatar name={itemTitle(h)} seed={itemTitle(h)} size={40} />
+            <Avatar name={rowTitle(h)} seed={rowTitle(h)} size={40} />
             <span className="min-w-0 flex-1 text-left">
-              <span className="block truncate text-[16px] text-text-primary">
-                {itemTitle(h)}
+              <span
+                className={cn(
+                  "block truncate text-[16px] text-text-primary",
+                  h.unreadCount > 0 && "font-semibold",
+                )}
+              >
+                {rowTitle(h)}
               </span>
               <span className="block truncate text-[14px] text-text-secondary">
                 {rowSubject(h)}
               </span>
             </span>
+            <span className="shrink-0 self-start pt-1 text-[12px] text-text-secondary">
+              {formatMobileTime(h.lastEmailAt)}
+            </span>
           </button>
         ))}
-        {q.trim() && (
-          <button
-            type="submit"
-            form=""
-            className="ol-m-hit"
-            onClick={() => {
-              o.setMobileSearchOpen(false);
-              navigate(`/?q=${encodeURIComponent(q.trim())}`);
-            }}
-          >
+        {searching && (
+          <button type="button" className="ol-m-hit" onClick={submitQuery}>
             <span className="flex h-10 w-10 items-center justify-center text-accent">
               <Search size={20} />
             </span>
-            <span className="text-[16px] text-accent">
-              See all results for “{q.trim()}”
-            </span>
+            <span className="text-[16px] text-accent">See all results</span>
           </button>
         )}
       </div>
@@ -433,13 +590,15 @@ function MobileSearch({ mail }: { mail: OutlookMail }) {
 function MobileConversation({
   mail,
   item,
-  onSnoozeCustom,
 }: {
   mail: OutlookMail;
   item: GroupedItem;
-  onSnoozeCustom: () => void;
 }) {
   const o = useOutlook();
+  const ui = useMailUi();
+  const [sheet, setSheet] = useState<null | "actions" | "reply" | "snooze">(
+    null,
+  );
   const conv = useConversation(item, mail.label);
   const [replyState, setReplyState] = useState<{
     email: Email;
@@ -487,64 +646,13 @@ function MobileConversation({
         >
           <Trash2 size={21} />
         </IconButton>
-        <Menu>
-          <MenuTrigger asChild>
-            <IconButton label="More actions" size="lg">
-              <MoreHorizontal size={22} />
-            </IconButton>
-          </MenuTrigger>
-          <MenuContent align="end" className="ol-menu-touch">
-            <MenuItem
-              icon={<FlagGlyph size={18} filled={item.starred} />}
-              onSelect={() => mail.ops.flag([item])}
-            >
-              {item.starred ? "Unflag" : "Flag"}
-            </MenuItem>
-            <MenuItem
-              icon={<Pin size={18} />}
-              onSelect={() => mail.ops.pin([item])}
-            >
-              {item.pinned ? "Unpin" : "Pin"}
-            </MenuItem>
-            <MenuItem
-              icon={unread ? <MailOpen size={18} /> : <Mail size={18} />}
-              onSelect={() => {
-                mail.ops.toggleRead([item]);
-                if (!unread) back();
-              }}
-            >
-              {unread ? "Mark as read" : "Mark as unread"}
-            </MenuItem>
-            <MenuSub>
-              <MenuSubTrigger icon={<Clock size={18} />}>Snooze</MenuSubTrigger>
-              <MenuSubContent className="ol-menu-touch">
-                <SnoozeMenuItems
-                  onPick={(u) => mail.ops.snooze([item], u)}
-                  onCustom={onSnoozeCustom}
-                />
-              </MenuSubContent>
-            </MenuSub>
-            {(mail.folder === "archive" || item.snoozedUntil) && (
-              <MenuItem
-                icon={<InboxIcon size={18} />}
-                onSelect={() => mail.ops.moveToInbox([item])}
-              >
-                Move to Inbox
-              </MenuItem>
-            )}
-            {item.type === "person" && (
-              <>
-                <MenuSeparator />
-                <MenuItem
-                  icon={<Ban size={18} />}
-                  onSelect={() => void mail.ops.block(item)}
-                >
-                  Block sender
-                </MenuItem>
-              </>
-            )}
-          </MenuContent>
-        </Menu>
+        <IconButton
+          label="More actions"
+          size="lg"
+          onClick={() => setSheet("actions")}
+        >
+          <MoreHorizontal size={22} />
+        </IconButton>
       </header>
       <div className="min-h-0 flex-1 overflow-y-auto">
         <div className="px-4 pb-2 pt-1">
@@ -579,32 +687,126 @@ function MobileConversation({
         >
           <Reply size={18} aria-hidden /> Reply
         </button>
-        <Menu>
-          <MenuTrigger asChild>
-            <IconButton
-              label="More reply options"
-              size="lg"
-              disabled={conv.emails.length === 0}
-            >
-              <ChevronDown size={20} />
-            </IconButton>
-          </MenuTrigger>
-          <MenuContent align="end" side="top" className="ol-menu-touch">
-            <MenuItem
-              icon={<ReplyAll size={18} />}
-              onSelect={() => sendConversationCommand("replyAll")}
-            >
-              Reply all
-            </MenuItem>
-            <MenuItem
-              icon={<Forward size={18} />}
-              onSelect={() => sendConversationCommand("forward")}
-            >
-              Forward
-            </MenuItem>
-          </MenuContent>
-        </Menu>
+        <IconButton
+          label="More reply options"
+          size="lg"
+          disabled={conv.emails.length === 0}
+          onClick={() => setSheet("reply")}
+        >
+          <MoreHorizontal size={20} />
+        </IconButton>
       </div>
+      <ActionSheet
+        open={sheet === "actions"}
+        onOpenChange={(v) => !v && setSheet(null)}
+        title={subject}
+        actions={[
+          {
+            id: "flag",
+            label: item.starred ? "Unflag" : "Flag",
+            icon: <FlagGlyph size={20} filled={item.starred} />,
+            onSelect: () => mail.ops.flag([item]),
+          },
+          {
+            id: "snooze",
+            label: "Snooze",
+            icon: <Clock size={20} />,
+            onSelect: () => setTimeout(() => setSheet("snooze"), 50),
+          },
+          {
+            id: "move",
+            label: "Move to folder",
+            icon: <FolderInput size={20} />,
+            onSelect: () => ui.requestMove([item]),
+          },
+          {
+            id: "read",
+            label: unread ? "Mark as read" : "Mark as unread",
+            icon: unread ? <MailOpen size={20} /> : <Mail size={20} />,
+            onSelect: () => {
+              mail.ops.toggleRead([item]);
+              if (!unread) back();
+            },
+          },
+          {
+            id: "pin",
+            label: item.pinned ? "Unpin" : "Pin",
+            icon: <Pin size={20} />,
+            onSelect: () => mail.ops.pin([item]),
+          },
+          {
+            id: "archive",
+            label: "Archive",
+            icon: <Archive size={20} />,
+            onSelect: () => mail.ops.archive([item]),
+          },
+          {
+            id: "inbox",
+            label: "Move to Inbox",
+            icon: <InboxIcon size={20} />,
+            hidden: !(mail.folder === "archive" || item.snoozedUntil),
+            onSelect: () => mail.ops.moveToInbox([item]),
+          },
+          {
+            id: "block",
+            label: "Block sender",
+            icon: <Ban size={20} />,
+            hidden: item.type !== "person",
+            onSelect: () => void mail.ops.block(item),
+          },
+          {
+            id: "delete",
+            label: "Delete",
+            icon: <Trash2 size={20} />,
+            danger: true,
+            hidden: item.type !== "person",
+            onSelect: () => void mail.ops.delete([item]),
+          },
+        ]}
+      />
+      <ActionSheet
+        open={sheet === "snooze"}
+        onOpenChange={(v) => !v && setSheet(null)}
+        title="Snooze until"
+        actions={[
+          ...snoozePresets().map((p) => ({
+            id: p.id,
+            label: `${p.label} · ${new Date(p.until * 1000).toLocaleString([], { weekday: "short", hour: "numeric", minute: "2-digit" })}`,
+            icon: <Clock size={20} />,
+            onSelect: () => mail.ops.snooze([item], p.until),
+          })),
+          {
+            id: "custom",
+            label: "Choose a date",
+            icon: <Clock size={20} />,
+            onSelect: () => ui.requestSnooze([item]),
+          },
+        ]}
+      />
+      <ActionSheet
+        open={sheet === "reply"}
+        onOpenChange={(v) => !v && setSheet(null)}
+        actions={[
+          {
+            id: "reply",
+            label: "Reply",
+            icon: <Reply size={20} />,
+            onSelect: () => sendConversationCommand("reply"),
+          },
+          {
+            id: "replyAll",
+            label: "Reply all",
+            icon: <ReplyAll size={20} />,
+            onSelect: () => sendConversationCommand("replyAll"),
+          },
+          {
+            id: "forward",
+            label: "Forward",
+            icon: <Forward size={20} />,
+            onSelect: () => sendConversationCommand("forward"),
+          },
+        ]}
+      />
       {replyState && (
         <InlineReply
           key={`${replyState.email.id}:${replyState.mode}`}
@@ -627,7 +829,8 @@ export default function MobileMail({ mail }: { mail: OutlookMail }) {
   const { data: session } = useSession();
   const { density } = usePreferences();
   const { senderIdentities } = useIdentities();
-  const [snoozeOpen, setSnoozeOpen] = useState(false);
+  const [moreOpen, setMoreOpen] = useState(false);
+  const ui = useMailUi();
   const [selecting, setSelecting] = useState(false);
   const userName = session?.user?.name || session?.user?.email || "";
   const navigate = useNavigate();
@@ -675,7 +878,7 @@ export default function MobileMail({ mail }: { mail: OutlookMail }) {
     ? senderIdentities.find((s) => s.email === mail.label)?.displayName ||
       mail.label
     : mail.folderTitle;
-  const rows = mail.mobileItems;
+  const rows = mail.visible;
   const selectedItems = useMemo(
     () => rows.filter((r) => mail.selected.has(itemKey(r))),
     [rows, mail.selected],
@@ -919,49 +1122,18 @@ export default function MobileMail({ mail }: { mail: OutlookMail }) {
             <FlagGlyph size={22} />
             Flag
           </button>
-          <Menu>
-            <MenuTrigger asChild>
-              <button type="button" disabled={!selectedItems.length}>
-                <MoreHorizontal size={22} aria-hidden />
-                More
-              </button>
-            </MenuTrigger>
-            <MenuContent side="top" align="end" className="ol-menu-touch">
-              <MenuItem
-                icon={<Pin size={18} />}
-                onSelect={() => act(() => mail.ops.pin(selectedItems))}
-              >
-                Pin
-              </MenuItem>
-              <MenuSub>
-                <MenuSubTrigger icon={<Clock size={18} />}>
-                  Snooze
-                </MenuSubTrigger>
-                <MenuSubContent className="ol-menu-touch">
-                  <SnoozeMenuItems
-                    onPick={(u) => act(() => mail.ops.snooze(selectedItems, u))}
-                    onCustom={() => setSnoozeOpen(true)}
-                  />
-                </MenuSubContent>
-              </MenuSub>
-              <MenuItem
-                icon={<InboxIcon size={18} />}
-                onSelect={() => act(() => mail.ops.moveToInbox(selectedItems))}
-              >
-                Move to Inbox
-              </MenuItem>
-            </MenuContent>
-          </Menu>
+          <button
+            type="button"
+            disabled={!selectedItems.length}
+            onClick={() => setMoreOpen(true)}
+          >
+            <MoreHorizontal size={22} aria-hidden />
+            More
+          </button>
         </nav>
       )}
 
-      {open && item && (
-        <MobileConversation
-          mail={mail}
-          item={item}
-          onSnoozeCustom={() => setSnoozeOpen(true)}
-        />
-      )}
+      {open && item && <MobileConversation mail={mail} item={item} />}
       {open && !item && (
         <div className="ol-m-conv">
           <header className="ol-m-conv-head">
@@ -985,14 +1157,42 @@ export default function MobileMail({ mail }: { mail: OutlookMail }) {
           variant="mobile"
         />
       )}
-      <SnoozeDialog
-        open={snoozeOpen}
-        onOpenChange={setSnoozeOpen}
-        onPick={(u) => {
-          const t = selecting ? selectedItems : item ? [item] : [];
-          mail.ops.snooze(t, u);
-          exitSelect();
-        }}
+      <ActionSheet
+        open={moreOpen}
+        onOpenChange={setMoreOpen}
+        title={`${selectedItems.length} selected`}
+        actions={[
+          {
+            id: "pin",
+            label: "Pin",
+            icon: <Pin size={20} />,
+            onSelect: () => act(() => mail.ops.pin(selectedItems)),
+          },
+          {
+            id: "snooze",
+            label: "Snooze",
+            icon: <Clock size={20} />,
+            onSelect: () => {
+              ui.requestSnooze(selectedItems);
+              exitSelect();
+            },
+          },
+          {
+            id: "move",
+            label: "Move to folder",
+            icon: <FolderInput size={20} />,
+            onSelect: () => {
+              ui.requestMove(selectedItems);
+              exitSelect();
+            },
+          },
+          {
+            id: "inbox",
+            label: "Move to Inbox",
+            icon: <InboxIcon size={20} />,
+            onSelect: () => act(() => mail.ops.moveToInbox(selectedItems)),
+          },
+        ]}
       />
     </div>
   );

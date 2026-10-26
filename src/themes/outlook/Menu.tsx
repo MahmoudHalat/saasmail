@@ -142,3 +142,50 @@ export function MenuSeparator() {
 export function MenuLabel({ children }: { children: ReactNode }) {
   return <DM.Label className="ol-menu-label">{children}</DM.Label>;
 }
+
+/**
+ * A menu opened at a screen point (right-click / Shift+F10 context menus).
+ * Radix needs a trigger, so a zero-size fixed anchor sits at the point.
+ */
+export function PointMenu({
+  point,
+  onClose,
+  children,
+  label,
+}: {
+  point: { x: number; y: number } | null;
+  onClose: () => void;
+  children: ReactNode;
+  label?: string;
+}) {
+  return (
+    <DM.Root open={!!point} onOpenChange={(o) => !o && onClose()} modal={false}>
+      <DM.Trigger asChild>
+        <span
+          aria-hidden
+          style={{
+            position: "fixed",
+            left: point?.x ?? 0,
+            top: point?.y ?? 0,
+            width: 0,
+            height: 0,
+            pointerEvents: "none",
+          }}
+        />
+      </DM.Trigger>
+      <DM.Portal>
+        <DM.Content
+          align="start"
+          side="bottom"
+          sideOffset={2}
+          collisionPadding={8}
+          aria-label={label}
+          className="ol-menu"
+          onCloseAutoFocus={(e) => e.preventDefault()}
+        >
+          {children}
+        </DM.Content>
+      </DM.Portal>
+    </DM.Root>
+  );
+}

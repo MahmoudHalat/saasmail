@@ -1,5 +1,7 @@
 import { useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import {
+  Brush,
+  Filter,
   Archive,
   Ban,
   ChevronDown,
@@ -45,7 +47,14 @@ import {
   MenuTrigger,
 } from "./Menu";
 import { SnoozeMenuItems } from "./Snooze";
-import { sendConversationCommand } from "./Conversation";
+import {
+  queueConversationCommand,
+  sendConversationCommand,
+  type ConversationCommand,
+} from "./Conversation";
+import { useMailUi } from "./actions";
+import { itemKey } from "@/hooks/useMailList";
+import { FILTER_LABELS, type ListFilter } from "./lib";
 import { FlagGlyph } from "./ui";
 
 type Tab = "home" | "view" | "help";
@@ -58,6 +67,8 @@ interface RibbonItem {
   /** Rendered inside the overflow "…" menu when there is no room. */
   menu: ReactNode;
   separatorBefore?: boolean;
+  /** Width when the ribbon is tight and this button shows its icon only. */
+  compact?: number;
 }
 
 function RBtn({
@@ -68,6 +79,7 @@ function RBtn({
   pressed,
   hideLabel,
   title,
+  compact,
 }: {
   icon: ReactNode;
   label: string;
@@ -76,15 +88,17 @@ function RBtn({
   pressed?: boolean;
   hideLabel?: boolean;
   title?: string;
+  compact?: boolean;
 }) {
   return (
     <button
       type="button"
+      data-compact={compact ? "" : undefined}
       className={cn("ol-rbtn", pressed && "ol-rbtn-on")}
       onClick={onClick}
       disabled={disabled}
       aria-pressed={pressed}
-      aria-label={hideLabel ? label : undefined}
+      aria-label={hideLabel || compact ? label : undefined}
       title={title ?? label}
     >
       <span className="ol-rbtn-icon" aria-hidden>
@@ -131,18 +145,27 @@ function RMenuBtn({
 export default function Ribbon({
   mail,
   onNewMail,
-  onSnoozeCustom,
 }: {
   mail: OutlookMail;
   onNewMail: () => void;
-  onSnoozeCustom: () => void;
 }) {
+  const ui = useMailUi();
+  const onSnoozeCustom = () => ui.requestSnooze(mail.targets);
   const [tab, setTab] = useState<Tab>("home");
   const o = useOutlook();
   const { colorMode, density, setPreferences } = usePreferences();
   const t = mail.targets;
   const none = t.length === 0;
-  const single = t.length === 1 && !!mail.openedItem;
+  const single = t.length === 1;
+  const reply = (cmd: ConversationCommand) => {
+    if (!t[0]) return;
+    if (mail.openedItem && itemKey(mail.openedItem) === itemKey(t[0]))
+      sendConversationCommand(cmd);
+    else {
+      queueConversationCommand(itemKey(t[0]), cmd);
+      mail.openItem(t[0]);
+    }
+  };
   const allFlagged = !none && t.every((i) => i.starred);
   const allPinned = !none && t.every((i) => i.pinned);
   const anyUnread = t.some((i) => i.unreadCount > 0);
@@ -190,13 +213,28 @@ export default function Ribbon({
     </MenuRadioGroup>
   );
 
+  const filterMenu = (
+    <MenuRadioGroup
+      value={mail.filter}
+      onValueChange={(v) => mail.setFilter(v as ListFilter)}
+    >
+      {(Object.keys(FILTER_LABELS) as ListFilter[]).map((f) => (
+        <MenuRadioItem key={f} value={f}>
+          {FILTER_LABELS[f]}
+        </MenuRadioItem>
+      ))}
+    </MenuRadioGroup>
+  );
+
   const home: RibbonItem[] = [
     {
       id: "delete",
       width: 82,
+      compact: 40,
       separatorBefore: true,
       node: (
         <RBtn
+          compact
           icon={<Trash2 size={18} />}
           label="Delete"
           disabled={none}
@@ -216,8 +254,10 @@ export default function Ribbon({
     {
       id: "archive",
       width: 86,
+      compact: 40,
       node: (
         <RBtn
+          compact
           icon={<Archive size={18} />}
           label="Archive"
           disabled={none}
@@ -262,6 +302,26 @@ export default function Ribbon({
       ),
     },
     {
+      id: "sweep",
+      width: 84,
+      node: (
+        <RBtn
+          icon={<Brush size={18} />}
+          label="Sweep"
+          title="Sweep: clear out everything from a sender"
+          onClick={() => ui.requestSweep(t)}
+        />
+      ),
+      menu: (
+        <MenuItem
+          icon={<Brush size={16} />}
+          onSelect={() => ui.requestSweep(t)}
+        >
+          Sweep
+        </MenuItem>
+      ),
+    },
+    {
       id: "move",
       width: 100,
       node: (
@@ -281,6 +341,14 @@ export default function Ribbon({
             onSelect={() => mail.ops.archive(t)}
           >
             Archive
+          </MenuItem>
+          <MenuSeparator />
+          <MenuItem
+            icon={<FolderInput size={16} />}
+            onSelect={() => ui.requestMove(t)}
+            shortcut="Ctrl+Shift+V"
+          >
+            Other folder…
           </MenuItem>
         </RMenuBtn>
       ),
@@ -311,20 +379,22 @@ export default function Ribbon({
     {
       id: "reply",
       width: 76,
+      compact: 40,
       separatorBefore: true,
       node: (
         <RBtn
+          compact
           icon={<Reply size={18} />}
           label="Reply"
           disabled={!single}
-          onClick={() => sendConversationCommand("reply")}
+          onClick={() => reply("reply")}
         />
       ),
       menu: (
         <MenuItem
           icon={<Reply size={16} />}
           disabled={!single}
-          onSelect={() => sendConversationCommand("reply")}
+          onSelect={() => reply("reply")}
         >
           Reply
         </MenuItem>
@@ -333,19 +403,21 @@ export default function Ribbon({
     {
       id: "replyAll",
       width: 94,
+      compact: 40,
       node: (
         <RBtn
+          compact
           icon={<ReplyAll size={18} />}
           label="Reply all"
           disabled={!single}
-          onClick={() => sendConversationCommand("replyAll")}
+          onClick={() => reply("replyAll")}
         />
       ),
       menu: (
         <MenuItem
           icon={<ReplyAll size={16} />}
           disabled={!single}
-          onSelect={() => sendConversationCommand("replyAll")}
+          onSelect={() => reply("replyAll")}
         >
           Reply all
         </MenuItem>
@@ -354,19 +426,21 @@ export default function Ribbon({
     {
       id: "forward",
       width: 90,
+      compact: 40,
       node: (
         <RBtn
+          compact
           icon={<Forward size={18} />}
           label="Forward"
           disabled={!single}
-          onClick={() => sendConversationCommand("forward")}
+          onClick={() => reply("forward")}
         />
       ),
       menu: (
         <MenuItem
           icon={<Forward size={16} />}
           disabled={!single}
-          onSelect={() => sendConversationCommand("forward")}
+          onSelect={() => reply("forward")}
         >
           Forward
         </MenuItem>
@@ -375,9 +449,11 @@ export default function Ribbon({
     {
       id: "read",
       width: 116,
+      compact: 40,
       separatorBefore: true,
       node: (
         <RBtn
+          compact
           icon={anyUnread ? <MailOpen size={18} /> : <Mail size={18} />}
           label={anyUnread ? "Read" : "Unread"}
           title={
@@ -400,8 +476,10 @@ export default function Ribbon({
     {
       id: "flag",
       width: 72,
+      compact: 40,
       node: (
         <RBtn
+          compact
           icon={<FlagGlyph size={18} filled={allFlagged} />}
           label={allFlagged ? "Unflag" : "Flag"}
           pressed={allFlagged}
@@ -422,8 +500,10 @@ export default function Ribbon({
     {
       id: "pin",
       width: 64,
+      compact: 40,
       node: (
         <RBtn
+          compact
           icon={
             <Pin size={18} className={allPinned ? "fill-current" : undefined} />
           }
@@ -469,11 +549,16 @@ export default function Ribbon({
     {
       id: "undo",
       width: 70,
+      compact: 40,
       separatorBefore: true,
       node: (
         <RBtn
+          compact
           icon={<Undo2 size={18} />}
           label="Undo"
+          title={
+            mail.undoLabel ? `Undo ${mail.undoLabel} (Ctrl+Z)` : "Undo (Ctrl+Z)"
+          }
           disabled={!mail.canUndo}
           onClick={() => void mail.undo()}
         />
@@ -505,6 +590,24 @@ export default function Ribbon({
         >
           Mark all as read
         </MenuItem>
+      ),
+    },
+    {
+      id: "filter",
+      width: 92,
+      node: (
+        <RMenuBtn
+          icon={<Filter size={18} />}
+          label={mail.filter === "all" ? "Filter" : FILTER_LABELS[mail.filter]}
+        >
+          {filterMenu}
+        </RMenuBtn>
+      ),
+      menu: (
+        <MenuSub>
+          <MenuSubTrigger icon={<Filter size={16} />}>Filter</MenuSubTrigger>
+          <MenuSubContent>{filterMenu}</MenuSubContent>
+        </MenuSub>
       ),
     },
   ];
@@ -654,14 +757,21 @@ export default function Ribbon({
     return () => ro.disconnect();
   }, []);
   const newMailWidth = tab === "home" ? 132 : 0;
-  let used = newMailWidth + 44;
-  let fit = 0;
-  for (const it of items) {
-    const w = it.width + (it.separatorBefore ? 9 : 0);
-    if (used + w > room) break;
-    used += w;
-    fit++;
-  }
+  const fitWith = (tight: boolean) => {
+    let used = newMailWidth + 44;
+    let n = 0;
+    for (const it of items) {
+      const w =
+        (tight && it.compact ? it.compact : it.width) +
+        (it.separatorBefore ? 9 : 0);
+      if (used + w > room) break;
+      used += w;
+      n++;
+    }
+    return n;
+  };
+  const tight = fitWith(false) < items.length;
+  const fit = fitWith(tight);
   const shown = items.slice(0, fit);
   const overflow = items.slice(fit);
 
@@ -696,7 +806,10 @@ export default function Ribbon({
           </button>
         ))}
       </div>
-      <div ref={barRef} className="ol-ribbon-bar">
+      <div
+        ref={barRef}
+        className={cn("ol-ribbon-bar", tight && "ol-ribbon-tight")}
+      >
         {tab === "home" && (
           <div className="ol-split">
             <button

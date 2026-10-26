@@ -1,6 +1,15 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useLocation } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
+import * as Dialog from "@radix-ui/react-dialog";
+import { openInNewWindow } from "./RowMenu";
 import {
+  Copy,
+  Mail,
+  Search,
+  X,
+  ExternalLink,
+  FileCode2,
+  Printer,
   AlertTriangle,
   Ban,
   Clock,
@@ -46,6 +55,15 @@ export function sendConversationCommand(cmd: ConversationCommand) {
   window.dispatchEvent(new CustomEvent(CONVERSATION_COMMAND, { detail: cmd }));
 }
 
+/** A command for a conversation that is about to open (runs once loaded). */
+let pendingCommand: { key: string; cmd: ConversationCommand } | null = null;
+export function queueConversationCommand(
+  key: string,
+  cmd: ConversationCommand,
+) {
+  pendingCommand = { key, cmd };
+}
+
 function formatBytes(n: number): string {
   if (n < 1024) return `${n} B`;
   if (n < 1024 * 1024) return `${(n / 1024).toFixed(0)} KB`;
@@ -86,6 +104,186 @@ function useParties(item: GroupedItem) {
   }, [item, senderIdentities]);
 }
 
+function escapeHtml(s: string): string {
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+/** Print one message (Outlook's ⋯ > Print): a clean page with the header. */
+function printEmail(email: Email, party: (a: string | null) => Party) {
+  const w = window.open("", "_blank", "width=820,height=900");
+  if (!w) return;
+  const from = party(email.fromAddress);
+  const to = email.type === "sent" ? email.toAddress : email.recipient;
+  const body = email.bodyHtml
+    ? sanitizeEmailHtml(email.bodyHtml)
+    : `<pre style="white-space:pre-wrap;font:inherit">${escapeHtml(email.bodyText ?? "")}</pre>`;
+  w.document.write(
+    `<!doctype html><html><head><meta charset="utf-8"><title>${escapeHtml(
+      email.subject ?? "Message",
+    )}</title><style>body{font:14px/1.5 "Segoe UI",system-ui,sans-serif;color:#242424;margin:32px}h1{font-size:20px;margin:0 0 12px}table{border-collapse:collapse;margin-bottom:16px}td{padding:2px 12px 2px 0;vertical-align:top}td:first-child{color:#616161}hr{border:0;border-top:1px solid #e0e0e0;margin:16px 0}img{max-width:100%}</style></head><body><h1>${escapeHtml(
+      email.subject ?? "(No subject)",
+    )}</h1><table><tr><td>From</td><td>${escapeHtml(`${from.name} <${from.email}>`)}</td></tr><tr><td>Sent</td><td>${escapeHtml(
+      formatFullDate(email.timestamp),
+    )}</td></tr><tr><td>To</td><td>${escapeHtml(to ?? "")}</td></tr>${
+      email.cc?.length
+        ? `<tr><td>Cc</td><td>${escapeHtml(email.cc.map((c) => c.email).join("; "))}</td></tr>`
+        : ""
+    }</table><hr>${body}</body></html>`,
+  );
+  w.document.close();
+  w.focus();
+  window.setTimeout(() => w.print(), 300);
+}
+
+/** "View message source": the stored headers and HTML, as text. */
+function SourceDialog({
+  email,
+  onClose,
+}: {
+  email: Email | null;
+  onClose: () => void;
+}) {
+  const text = email
+    ? [
+        `From: ${email.fromAddress ?? ""}`,
+        `To: ${(email.type === "sent" ? email.toAddress : email.recipient) ?? ""}`,
+        email.cc?.length
+          ? `Cc: ${email.cc.map((c) => c.email).join(", ")}`
+          : null,
+        email.replyTo ? `Reply-To: ${email.replyTo}` : null,
+        `Subject: ${email.subject ?? ""}`,
+        `Date: ${new Date(email.timestamp * 1000).toUTCString()}`,
+        `X-Saasmail-Id: ${email.id}`,
+        email.status ? `X-Delivery-Status: ${email.status}` : null,
+        "",
+        email.bodyHtml ?? email.bodyText ?? "",
+      ]
+        .filter((l) => l !== null)
+        .join("\n")
+    : "";
+  return (
+    <Dialog.Root open={!!email} onOpenChange={(o) => !o && onClose()}>
+      <Dialog.Portal>
+        <Dialog.Overlay className="ol-scrim" />
+        <Dialog.Content className="ol-dialog flex max-h-[85dvh] w-[min(94vw,860px)] flex-col">
+          <div className="flex items-center justify-between pb-2">
+            <Dialog.Title className="text-[18px] font-semibold text-text-primary">
+              Message source
+            </Dialog.Title>
+            <div className="flex gap-1">
+              <button
+                type="button"
+                className="ol-btn-outline"
+                onClick={() =>
+                  void navigator.clipboard
+                    ?.writeText(text)
+                    .then(() =>
+                      showToast({ kind: "success", message: "Copied" }),
+                    )
+                }
+              >
+                Copy
+              </button>
+              <Dialog.Close asChild>
+                <IconButton label="Close">
+                  <X size={18} />
+                </IconButton>
+              </Dialog.Close>
+            </div>
+          </div>
+          <Dialog.Description className="pb-2 text-[12px] text-text-secondary">
+            Stored headers and body. The raw MIME of received mail isn't kept.
+          </Dialog.Description>
+          <pre className="ol-source">{text}</pre>
+        </Dialog.Content>
+      </Dialog.Portal>
+    </Dialog.Root>
+  );
+}
+
+/** Sender contact card (Outlook's live persona card) on click or hover. */
+function ContactCard({
+  name,
+  email,
+  inboxes,
+  onEmail,
+  onSearch,
+}: {
+  name: string;
+  email: string;
+  inboxes: string[];
+  onEmail: (addr: string) => void;
+  onSearch: (addr: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const hover = (on: boolean) => {
+    if (timer.current) clearTimeout(timer.current);
+    timer.current = setTimeout(() => setOpen(on), on ? 600 : 250);
+  };
+  return (
+    <Menu open={open} onOpenChange={setOpen} modal={false}>
+      <MenuTrigger asChild>
+        <button
+          type="button"
+          className="ol-persona-name"
+          onPointerEnter={(e) => e.pointerType === "mouse" && hover(true)}
+          onPointerLeave={(e) => e.pointerType === "mouse" && hover(false)}
+        >
+          {name}
+        </button>
+      </MenuTrigger>
+      <MenuContent
+        align="start"
+        className="ol-persona"
+        onPointerEnter={() => hover(true)}
+        onPointerLeave={() => hover(false)}
+      >
+        <div className="flex items-center gap-3 p-3">
+          <Avatar name={name} seed={email || name} size={56} />
+          <div className="min-w-0">
+            <div className="truncate text-[16px] font-semibold text-text-primary">
+              {name}
+            </div>
+            <div className="truncate text-[13px] text-text-secondary">
+              {email}
+            </div>
+          </div>
+        </div>
+        {inboxes.length > 0 && (
+          <div className="px-3 pb-2 text-[12px] text-text-secondary">
+            Writes to{" "}
+            {inboxes.map((i) => (
+              <span key={i} className="ol-cat mr-1">
+                {i}
+              </span>
+            ))}
+          </div>
+        )}
+        <MenuSeparator />
+        <MenuItem icon={<Mail size={16} />} onSelect={() => onEmail(email)}>
+          Send email
+        </MenuItem>
+        <MenuItem icon={<Search size={16} />} onSelect={() => onSearch(email)}>
+          Search messages from {name.split(" ")[0]}
+        </MenuItem>
+        <MenuItem
+          icon={<Copy size={16} />}
+          onSelect={() =>
+            void navigator.clipboard
+              ?.writeText(email)
+              .then(() =>
+                showToast({ kind: "success", message: "Address copied" }),
+              )
+          }
+        >
+          Copy email address
+        </MenuItem>
+      </MenuContent>
+    </Menu>
+  );
+}
+
 function MessageCard({
   email,
   expanded,
@@ -96,9 +294,21 @@ function MessageCard({
   onDelete,
   onBlock,
   onSource,
+  onRawSource,
+  onPrint,
+  onOpenWindow,
+  onSearchFrom,
+  onEmailTo,
+  inboxes,
   canBlock,
   compact,
 }: {
+  onRawSource: () => void;
+  onPrint: () => void;
+  onOpenWindow?: () => void;
+  onSearchFrom: (addr: string) => void;
+  onEmailTo: (addr: string) => void;
+  inboxes: string[];
   email: Email;
   expanded: boolean;
   onToggle: () => void;
@@ -183,25 +393,42 @@ function MessageCard({
         </button>
         <div className="min-w-0 flex-1">
           <div className="flex min-w-0 flex-wrap items-baseline gap-x-1.5">
-            <span className="truncate text-[14px] font-semibold text-text-primary">
-              {from.name}
-            </span>
+            <ContactCard
+              name={from.name}
+              email={from.email}
+              inboxes={sent ? [] : inboxes}
+              onEmail={onEmailTo}
+              onSearch={onSearchFrom}
+            />
             <span className="ol-msg-addr truncate text-[12px] text-text-secondary">
               &lt;{from.email}&gt;
             </span>
           </div>
-          <div className="truncate text-[12px] text-text-secondary">
-            To:&nbsp;
-            <span className="text-text-primary">{to.name}</span>
-            {email.cc && email.cc.length > 0 && (
-              <>
-                {"  "}Cc:&nbsp;
-                <span className="text-text-primary">
-                  {email.cc.map((c) => c.name || c.email).join("; ")}
-                </span>
-              </>
-            )}
+          <div className="ol-msg-recips text-[12px] text-text-secondary">
+            <span>To:&nbsp;</span>
+            <span className="text-text-primary">
+              {to.name}
+              {to.name !== to.email && (
+                <span className="ol-recip-addr"> &lt;{to.email}&gt;</span>
+              )}
+            </span>
           </div>
+          {email.cc && email.cc.length > 0 && (
+            <div className="ol-msg-recips text-[12px] text-text-secondary">
+              <span>Cc:&nbsp;</span>
+              <span className="text-text-primary">
+                {email.cc.map((c, i) => (
+                  <span key={c.email}>
+                    {i > 0 && "; "}
+                    {c.name || c.email}
+                    {c.name && (
+                      <span className="ol-recip-addr"> &lt;{c.email}&gt;</span>
+                    )}
+                  </span>
+                ))}
+              </span>
+            </div>
+          )}
           {(failed || retrying) && (
             <div
               className={cn(
@@ -266,9 +493,21 @@ function MessageCard({
                 >
                   Copy link
                 </MenuItem>
-                {email.bodyHtml && (
-                  <MenuItem icon={<Code size={16} />} onSelect={onSource}>
-                    View message details
+                <MenuItem icon={<Printer size={16} />} onSelect={onPrint}>
+                  Print
+                </MenuItem>
+                <MenuItem icon={<FileCode2 size={16} />} onSelect={onRawSource}>
+                  View message source
+                </MenuItem>
+                <MenuItem icon={<Code size={16} />} onSelect={onSource}>
+                  Show original
+                </MenuItem>
+                {onOpenWindow && (
+                  <MenuItem
+                    icon={<ExternalLink size={16} />}
+                    onSelect={onOpenWindow}
+                  >
+                    Open in new window
                   </MenuItem>
                 )}
                 {canBlock && (
@@ -377,6 +616,9 @@ export default function Conversation({
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [showAll, setShowAll] = useState(false);
   const [sourceEmail, setSourceEmail] = useState<Email | null>(null);
+  const [rawEmail, setRawEmail] = useState<Email | null>(null);
+  const navigate = useNavigate();
+  const isPopout = new URLSearchParams(location.search).get("popout") === "1";
   const initFor = useRef<string | null>(null);
   const key = `${item.type}:${item.id}`;
 
@@ -420,15 +662,24 @@ export default function Conversation({
   };
 
   // Ribbon / keyboard commands act on the newest message.
+  const runCommand = (cmd: ConversationCommand) => {
+    const latest =
+      emails.find((m) => m.type === "received") ?? emails[0] ?? null;
+    if (!latest) return;
+    if (cmd === "forward") forward(emails[0]);
+    else setReplyState({ email: latest, mode: cmd });
+  };
   useEffect(() => {
-    const on = (e: Event) => {
-      const cmd = (e as CustomEvent<ConversationCommand>).detail;
-      const latest =
-        emails.find((m) => m.type === "received") ?? emails[0] ?? null;
-      if (!latest) return;
-      if (cmd === "forward") forward(emails[0]);
-      else setReplyState({ email: latest, mode: cmd });
-    };
+    if (pendingCommand && pendingCommand.key === key && emails.length > 0) {
+      const { cmd } = pendingCommand;
+      pendingCommand = null;
+      runCommand(cmd);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [emails, key]);
+  useEffect(() => {
+    const on = (e: Event) =>
+      runCommand((e as CustomEvent<ConversationCommand>).detail);
     window.addEventListener(CONVERSATION_COMMAND, on);
     return () => window.removeEventListener(CONVERSATION_COMMAND, on);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -526,6 +777,18 @@ export default function Conversation({
           onBlock={onBlock}
           canBlock={item.type === "person" && m.type === "received"}
           onSource={() => setSourceEmail(m)}
+          onRawSource={() => setRawEmail(m)}
+          onPrint={() => printEmail(m, party)}
+          onOpenWindow={
+            variant === "pane" && !isPopout
+              ? () => openInNewWindow(item)
+              : undefined
+          }
+          onSearchFrom={(a) =>
+            navigate(`/?q=${encodeURIComponent(`from:${a}`)}`)
+          }
+          onEmailTo={(a) => onCompose({ to: a })}
+          inboxes={item.type === "person" ? item.recipients : [item.inbox]}
         />
       ))}
       {hidden > 0 && (
@@ -543,6 +806,7 @@ export default function Conversation({
           No messages here.
         </p>
       )}
+      <SourceDialog email={rawEmail} onClose={() => setRawEmail(null)} />
       <EmailHtmlModal
         email={sourceEmail}
         open={sourceEmail !== null}

@@ -4,7 +4,21 @@ import { ExternalLink, Monitor, Moon, Sun, X } from "lucide-react";
 import { usePreferences } from "@/lib/preferences";
 import type { UiTheme } from "@/lib/api";
 import { cn } from "@/lib/utils";
-import { useOutlook, type ReadingPanePos } from "./context";
+import {
+  ALL_QUICK_ACTIONS,
+  useOutlook,
+  type QuickAction,
+  type ReadingPanePos,
+} from "./context";
+import { SWIPE_LABELS, type SwipeAction } from "./lib";
+
+const QUICK_LABELS: Record<QuickAction, string> = {
+  delete: "Delete",
+  archive: "Archive",
+  flag: "Flag / Clear flag",
+  pin: "Pin / Unpin",
+  read: "Mark as read / unread",
+};
 import { IconButton } from "./ui";
 
 function Radio<T extends string>({
@@ -43,7 +57,8 @@ function Radio<T extends string>({
 export function SettingsBody({ onDone }: { onDone?: () => void }) {
   const navigate = useNavigate();
   const { colorMode, density, uiTheme, setPreferences } = usePreferences();
-  const { readingPane, conversationView, spacious, setLayout } = useOutlook();
+  const o = useOutlook();
+  const { readingPane, conversationView, spacious, setLayout } = o;
   const densityValue =
     density === "compact" ? "compact" : spacious ? "spacious" : "cozy";
 
@@ -138,6 +153,101 @@ export function SettingsBody({ onDone }: { onDone?: () => void }) {
           </Radio>
         </div>
       </section>
+
+      <section>
+        <h3 className="ol-settings-h">Focused Inbox</h3>
+        <label className="ol-switch">
+          <input
+            type="checkbox"
+            role="switch"
+            checked={o.focusedInbox}
+            onChange={(e) => setLayout({ focusedInbox: e.target.checked })}
+          />
+          <span className="ol-switch-track" aria-hidden />
+          <span>Sort messages into Focused and Other</span>
+        </label>
+      </section>
+
+      <section>
+        <h3 className="ol-settings-h">Show as</h3>
+        <div className="flex flex-col gap-1">
+          <Radio
+            name="ol-showas"
+            value="conversations"
+            current={o.showAs}
+            onChange={(v) => setLayout({ showAs: v })}
+          >
+            Conversations
+          </Radio>
+          <Radio
+            name="ol-showas"
+            value="messages"
+            current={o.showAs}
+            onChange={(v) => setLayout({ showAs: v })}
+          >
+            Messages
+          </Radio>
+        </div>
+      </section>
+
+      {!o.isMobile && (
+        <section>
+          <h3 className="ol-settings-h">Quick actions</h3>
+          <p className="mb-2 text-[12px] text-text-secondary">
+            Shown when you point at a message in the list.
+          </p>
+          <div className="flex flex-col gap-1">
+            {ALL_QUICK_ACTIONS.map((a) => (
+              <label key={a} className="ol-check">
+                <input
+                  type="checkbox"
+                  checked={o.quickActions.includes(a)}
+                  onChange={(e) =>
+                    setLayout({
+                      quickActions: e.target.checked
+                        ? ALL_QUICK_ACTIONS.filter(
+                            (x) => x === a || o.quickActions.includes(x),
+                          )
+                        : o.quickActions.filter((x) => x !== a),
+                    })
+                  }
+                />
+                <span>{QUICK_LABELS[a]}</span>
+              </label>
+            ))}
+          </div>
+        </section>
+      )}
+
+      {o.isMobile && (
+        <section>
+          <h3 className="ol-settings-h">Swipe options</h3>
+          {(
+            [
+              ["swipeRight", "Swipe right"],
+              ["swipeLeft", "Swipe left"],
+            ] as const
+          ).map(([k, label]) => (
+            <label key={k} className="ol-field-row">
+              <span>{label}</span>
+              <select
+                value={o[k]}
+                onChange={(e) =>
+                  setLayout({ [k]: e.target.value as SwipeAction })
+                }
+                className="ol-select"
+                aria-label={label}
+              >
+                {(Object.keys(SWIPE_LABELS) as SwipeAction[]).map((v) => (
+                  <option key={v} value={v}>
+                    {SWIPE_LABELS[v]}
+                  </option>
+                ))}
+              </select>
+            </label>
+          ))}
+        </section>
+      )}
 
       <section className="max-md:hidden">
         <h3 className="ol-settings-h">Reading pane</h3>

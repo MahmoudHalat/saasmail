@@ -4,19 +4,15 @@ import {
   EMPTY_MAIL_ROW_STATE,
   addBlock,
   fetchConversationEmails,
+  fetchGroupedPeople,
   fetchPerson,
   fetchPersonEmails,
   markEmailRead,
   updateMailState,
   type GroupedItem,
+  type MailFolder,
 } from "@/lib/api";
-import {
-  itemKey,
-  itemRef,
-  itemTitle,
-  useMailList,
-  type MailListQuery,
-} from "@/hooks/useMailList";
+import { itemKey, itemRef, itemTitle } from "@/hooks/useMailList";
 import { showToast } from "@/lib/toast";
 import {
   FOLDER_LABELS,
@@ -24,22 +20,25 @@ import {
   folderQuery,
   groupRows,
   parseFolder,
+  parseSearchQuery,
   rangeKeys,
   splitFocused,
+  sweepSelection,
   type ListFilter,
   type ListSort,
   type OlFolderId,
 } from "./lib";
 import { folderHref, type FolderTarget } from "./FolderList";
-
-type Patch = {
-  starred?: boolean;
-  pinned?: boolean;
-  archived?: boolean;
-  snoozedUntil?: number | null;
-};
+import { useOutlook } from "./context";
+import { useOutlookList, type StatePatch } from "./useOutlookList";
 
 export type FocusTab = "focused" | "other";
+export type MoveTarget =
+  | "inbox"
+  | "archive"
+  | "deleted"
+  | "snoozed"
+  | "flagged";
 
 function parseOpen(
   raw: string | null,
@@ -53,20 +52,63 @@ function parseOpen(
   return { type, id };
 }
 
+function readLocal<T extends string>(
+  key: string,
+  allowed: T[],
+  fallback: T,
+): T {
+  try {
+    const v = window.localStorage.getItem(key);
+    return v && (allowed as string[]).includes(v) ? (v as T) : fallback;
+  } catch {
+    return fallback;
+  }
+}
+function writeLocal(key: string, v: string) {
+  try {
+    window.localStorage.setItem(key, v);
+  } catch {
+    /* ignore */
+  }
+}
+
+/** Snapshot of a row's mail state, so Undo restores exactly. */
+interface Snapshot {
+  item: GroupedItem;
+  state: Required<StatePatch>;
+}
+function snapshot(items: GroupedItem[]): Snapshot[] {
+  return items.map((item) => ({
+    item,
+    state: {
+      starred: item.starred,
+      pinned: item.pinned,
+      archived: !!item.archivedAt,
+      snoozedUntil: item.snoozedUntil,
+    },
+  }));
+}
+
 /**
- * Everything the Outlook inbox needs, desktop and mobile alike: folder and
- * search state from the URL, the list (with "load more" accumulation and
- * client filters), selection, and mail actions with a one-step Undo.
+ * Everything the Outlook mail module needs, desktop and mobile: folder and
+ * search state from the URL (with Outlook query syntax), the list with
+ * filters / arrange-by / Focused-Other, selection (the keyboard cursor
+ * counts as selected), and mail actions with a multi-step Undo.
  */
 export function useOutlookMail() {
   const navigate = useNavigate();
   const [params, setParams] = useSearchParams();
   const routeParams = useParams<{ inbox?: string; personId?: string }>();
+  const o = useOutlook();
 
-  const folder: OlFolderId = parseFolder(params.get("folder"));
+  const urlFolder: OlFolderId = parseFolder(params.get("folder"));
   const label = params.get("label") || undefined;
   const q = params.get("q") || "";
   const scopeCurrent = params.get("scope") === "current";
+  const popout = params.get("popout") === "1";
+  const parsed = useMemo(() => parseSearchQuery(q), [q]);
+  const folder: OlFolderId = q && parsed.folder ? parsed.folder : urlFolder;
+
   const openParam =
     parseOpen(params.get("open")) ??
     (routeParams.personId
@@ -74,104 +116,85 @@ export function useOutlookMail() {
       : null);
   const openKey = openParam ? `${openParam.type}:${openParam.id}` : null;
 
-  const [filter, setFilter] = useState<ListFilter>("all");
-  const [sort, setSort] = useState<ListSort>("date");
-  const [focusTab, setFocusTab] = useState<FocusTab>(() => {
-    try {
-      return window.sessionStorage.getItem("saasmail.outlook.focus") === "other"
-        ? "other"
-        : "focused";
-    } catch {
-      return "focused";
-    }
-  });
-  useEffect(() => {
-    try {
-      window.sessionStorage.setItem("saasmail.outlook.focus", focusTab);
-    } catch {
-      /* ignore */
-    }
-  }, [focusTab]);
+  const [filter, setFilterState] = useState<ListFilter>("all");
+  const [sort, setSortState] = useState<ListSort>(() =>
+    readLocal(
+      "saasmail.outlook.sort",
+      ["date", "from", "category", "flag", "unread", "files"],
+      "date",
+    ),
+  );
+  const setSort = (s: ListSort) => {
+    setSortState(s);
+    writeLocal("saasmail.outlook.sort", s);
+  };
+  const setFilter = (f: ListFilter) => setFilterState(f);
+  const [focusTab, setFocusTabState] = useState<FocusTab>(() =>
+    readLocal("saasmail.outlook.focus", ["focused", "other"], "focused"),
+  );
+  const setFocusTab = (t: FocusTab) => {
+    setFocusTabState(t);
+    writeLocal("saasmail.outlook.focus", t);
+  };
 
-  const query: MailListQuery = useMemo(() => {
-    const base =
-      q && !scopeCurrent ? { folder: "all" as const } : folderQuery(folder);
+  // ── Server query ──────────────────────────────────────────────────────
+  const recipientFromTo =
+    parsed.to && o.knownInboxes.includes(parsed.to.toLowerCase())
+      ? parsed.to.toLowerCase()
+      : undefined;
+  const query = useMemo(() => {
+    const searching = !!q;
+    const fq = folderQuery(folder);
+    const base: {
+      folder: MailFolder;
+      drafts?: boolean;
+      sequenced?: boolean;
+      unread?: boolean;
+    } = searching && !scopeCurrent && !parsed.folder ? { folder: "all" } : fq;
+    if (searching && parsed.flagged) base.folder = "starred";
     return {
       ...base,
-      recipient: label,
-      q: q || undefined,
-      unread: filter === "unread" || undefined,
+      recipient: recipientFromTo ?? label,
+      q: parsed.text || undefined,
+      unread:
+        base.unread ||
+        filter === "unread" ||
+        parsed.unread === true ||
+        undefined,
+      hasAttachment:
+        filter === "files" || parsed.hasAttachment === true || undefined,
+      from: parsed.from || undefined,
     };
-  }, [folder, label, q, scopeCurrent, filter]);
+  }, [folder, label, q, scopeCurrent, parsed, filter, recipientFromTo]);
 
-  const list = useMailList(query);
-
-  // ── "Load more": keep earlier pages, patched locally ──────────────────
-  const [earlier, setEarlier] = useState<GroupedItem[]>([]);
-  const queryKey = JSON.stringify(query);
-  useEffect(() => setEarlier([]), [queryKey]);
-
-  const allItems = useMemo(() => {
-    const seen = new Set<string>();
-    const out: GroupedItem[] = [];
-    for (const it of [...earlier, ...list.items]) {
-      const k = itemKey(it);
-      if (seen.has(k)) continue;
-      seen.add(k);
-      out.push(it);
-    }
-    return out;
-  }, [earlier, list.items]);
-
-  const hasMore = list.page < list.pageCount;
-  const loadMore = useCallback(() => {
-    if (list.loading || list.page >= list.pageCount) return;
-    setEarlier(allItems);
-    list.setPage(list.page + 1);
-  }, [list, allItems]);
-
-  const patchEarlier = useCallback(
-    (
-      targets: GroupedItem[],
-      patch: Patch & { unreadCount?: number },
-      remove: boolean,
-    ) => {
-      const keys = new Set(targets.map(itemKey));
-      setEarlier((prev) => {
-        const next = prev.map((it) =>
-          keys.has(itemKey(it))
-            ? {
-                ...it,
-                ...(patch.starred !== undefined && { starred: patch.starred }),
-                ...(patch.pinned !== undefined && { pinned: patch.pinned }),
-                ...(patch.unreadCount !== undefined && {
-                  unreadCount: patch.unreadCount,
-                }),
-              }
-            : it,
-        );
-        return remove ? next.filter((it) => !keys.has(itemKey(it))) : next;
-      });
-    },
-    [],
-  );
+  const list = useOutlookList(query, folder !== "deleted");
 
   // ── Filters, Focused/Other, grouping ──────────────────────────────────
-  const showFocusTabs = folder === "inbox" && !q;
-  const filtered = useMemo(
-    () => applyFilter(allItems, filter),
-    [allItems, filter],
-  );
+  const filtered = useMemo(() => {
+    let rows = applyFilter(list.items, filter);
+    if (parsed.after) rows = rows.filter((r) => r.lastEmailAt >= parsed.after!);
+    if (parsed.before)
+      rows = rows.filter((r) => r.lastEmailAt < parsed.before!);
+    if (parsed.unread === false) rows = rows.filter((r) => r.unreadCount === 0);
+    if (parsed.flagged === false) rows = rows.filter((r) => !r.starred);
+    if (parsed.hasAttachment === false)
+      rows = rows.filter((r) => !r.hasAttachment);
+    return rows;
+  }, [list.items, filter, parsed]);
+
+  const showFocusTabs = o.focusedInbox && folder === "inbox" && !label && !q;
   const focusSplit = useMemo(() => splitFocused(filtered), [filtered]);
-  const mobileItems = showFocusTabs
+  const visible = showFocusTabs
     ? focusTab === "focused"
       ? focusSplit.focused
       : focusSplit.other
     : filtered;
+  const otherUnread = focusSplit.other.filter((i) => i.unreadCount > 0);
 
   const groups = useMemo(
-    () => groupRows(filtered, sort, itemTitle, new Date(), folder === "inbox"),
-    [filtered, sort, folder],
+    () =>
+      groupRows(visible, sort, itemTitle, new Date(), folder === "inbox" && !q),
+    [visible, sort, folder, q],
   );
   const order = useMemo(
     () => groups.flatMap((g) => g.items.map(itemKey)),
@@ -182,27 +205,29 @@ export function useOutlookMail() {
   const [selected, setSelected] = useState<Set<string>>(
     () => new Set(openKey ? [openKey] : []),
   );
+  const [cursorKey, setCursorKey] = useState<string | null>(openKey);
   const [checkMode, setCheckMode] = useState(false);
   const anchorRef = useRef<string | null>(openKey);
 
   useEffect(() => {
     if (openKey) {
       setSelected(new Set([openKey]));
+      setCursorKey(openKey);
       anchorRef.current = openKey;
     }
   }, [openKey]);
 
-  // Drop selection on folder change.
   useEffect(() => {
     setSelected(new Set());
     setCheckMode(false);
-  }, [folder, label, q]);
+    setCursorKey(null);
+  }, [folder, label, q, focusTab]);
 
   const byKey = useMemo(() => {
     const m = new Map<string, GroupedItem>();
-    for (const it of allItems) m.set(itemKey(it), it);
+    for (const it of list.items) m.set(itemKey(it), it);
     return m;
-  }, [allItems]);
+  }, [list.items]);
 
   // Opened row that is not in the loaded list (deep link, search pick).
   const [fallback, setFallback] = useState<GroupedItem | null>(null);
@@ -273,40 +298,45 @@ export function useOutlookMail() {
         .filter((x): x is GroupedItem => !!x),
     [selected, byKey, openedItem],
   );
-  /** Rows a toolbar action applies to. */
+  const cursorItem = cursorKey ? (byKey.get(cursorKey) ?? null) : null;
+  /** Rows a command applies to: selection, else the open row, else the
+   *  keyboard-focused row (Outlook treats the focused row as selected). */
   const targets: GroupedItem[] =
-    selectedItems.length > 0 ? selectedItems : openedItem ? [openedItem] : [];
+    selectedItems.length > 0
+      ? selectedItems
+      : openedItem
+        ? [openedItem]
+        : cursorItem
+          ? [cursorItem]
+          : [];
 
   const setOpen = useCallback(
     (key: string | null, replace = false) => {
       const next = new URLSearchParams(params);
       if (key) next.set("open", key);
       else next.delete("open");
-      // Leaving a /inbox/:inbox/:personId deep link: go back to "/".
-      if (routeParams.personId) {
-        navigate(`/?${next.toString()}`, { replace });
-      } else {
-        setParams(next, { replace });
-      }
+      if (routeParams.personId) navigate(`/?${next.toString()}`, { replace });
+      else setParams(next, { replace });
     },
     [params, setParams, navigate, routeParams.personId],
   );
 
   const openItem = useCallback(
     (item: GroupedItem | null, opts?: { replace?: boolean }) => {
+      if (item) o.closeCompose();
       setOpen(item ? itemKey(item) : null, opts?.replace);
       if (!item) setSelected(new Set());
     },
-    [setOpen],
+    [setOpen, o],
   );
 
-  /** Row click with Ctrl/Cmd (toggle) and Shift (range) multi-select. */
   const clickRow = useCallback(
     (
       item: GroupedItem,
       e: { ctrlKey?: boolean; metaKey?: boolean; shiftKey?: boolean },
     ) => {
       const key = itemKey(item);
+      setCursorKey(key);
       if (e.shiftKey && anchorRef.current) {
         const keys = rangeKeys(order, anchorRef.current, key);
         setSelected(new Set(keys));
@@ -315,6 +345,7 @@ export function useOutlookMail() {
       }
       if (e.ctrlKey || e.metaKey || checkMode) {
         const next = new Set(selected);
+        if (openKey && next.size === 0) next.add(openKey);
         if (next.has(key)) next.delete(key);
         else next.add(key);
         anchorRef.current = key;
@@ -333,13 +364,25 @@ export function useOutlookMail() {
     (item: GroupedItem) => {
       const key = itemKey(item);
       const next = new Set(selected);
+      if (openKey && next.size === 0) next.add(openKey);
       if (next.has(key)) next.delete(key);
       else next.add(key);
       anchorRef.current = key;
+      setCursorKey(key);
       setSelected(next);
       if (openKey) setOpen(null, true);
     },
     [selected, openKey, setOpen],
+  );
+
+  /** Right-click / drag: keep a multi-selection that contains the row. */
+  const actionRows = useCallback(
+    (item: GroupedItem): GroupedItem[] => {
+      const key = itemKey(item);
+      if (selected.has(key) && selectedItems.length > 1) return selectedItems;
+      return [item];
+    },
+    [selected, selectedItems],
   );
 
   const selectAll = useCallback(() => {
@@ -353,136 +396,209 @@ export function useOutlookMail() {
     if (openKey) setOpen(null);
   }, [openKey, setOpen]);
 
-  /** Move the open row up or down the list. */
-  const step = useCallback(
-    (dir: 1 | -1) => {
+  /** Move the open row (or cursor) through the list and open it. */
+  const stepTo = useCallback(
+    (where: 1 | -1 | "first" | "last") => {
       if (order.length === 0) return;
-      const cur = openKey ?? [...selected][0] ?? null;
+      const cur = openKey ?? cursorKey ?? [...selected][0] ?? null;
       const i = cur ? order.indexOf(cur) : -1;
-      const j = Math.max(0, Math.min(order.length - 1, i + dir));
+      const j =
+        where === "first"
+          ? 0
+          : where === "last"
+            ? order.length - 1
+            : i < 0
+              ? 0
+              : Math.max(0, Math.min(order.length - 1, i + where));
       const it = byKey.get(order[j]);
-      if (it) openItem(it, { replace: true });
+      if (it) {
+        setCursorKey(order[j]);
+        openItem(it, { replace: true });
+      }
     },
-    [order, openKey, selected, byKey, openItem],
+    [order, openKey, cursorKey, selected, byKey, openItem],
   );
 
-  /** After a row leaves the view, open its neighbour (Outlook default). */
+  /** After rows leave the view, open the neighbour (Outlook default). */
   const openNeighbour = useCallback(
     (gone: GroupedItem[]) => {
-      if (!openKey) return;
       const goneKeys = new Set(gone.map(itemKey));
-      if (!goneKeys.has(openKey)) return;
-      const i = order.indexOf(openKey);
+      setSelected((s) => new Set([...s].filter((k) => !goneKeys.has(k))));
+      const cur = openKey ?? cursorKey;
+      if (!cur || !goneKeys.has(cur)) return;
+      const i = order.indexOf(cur);
       const rest = order.filter((k) => !goneKeys.has(k));
       const nextKey = rest[Math.min(i, rest.length - 1)] ?? null;
-      const it = nextKey ? byKey.get(nextKey) : null;
-      openItem(it ?? null, { replace: true });
+      setCursorKey(nextKey);
+      if (openKey) {
+        const it = nextKey ? byKey.get(nextKey) : null;
+        openItem(o.isMobile ? null : (it ?? null), { replace: true });
+      }
     },
-    [openKey, order, byKey, openItem],
+    [openKey, cursorKey, order, byKey, openItem, o.isMobile],
   );
 
-  // ── Undo (last mail-state action) ─────────────────────────────────────
-  const [undoEntry, setUndoEntry] = useState<{
-    label: string;
-    run: () => Promise<unknown>;
-  } | null>(null);
-  const remember = (labelText: string, items: GroupedItem[], inverse: Patch) =>
-    setUndoEntry({
-      label: labelText,
-      run: () => updateMailState(items.map(itemRef), inverse),
-    });
+  // ── Undo stack ────────────────────────────────────────────────────────
+  const [undoStack, setUndoStack] = useState<
+    Array<{ label: string; snaps: Snapshot[] }>
+  >([]);
+  const pushUndo = (labelText: string, snaps: Snapshot[]) =>
+    setUndoStack((s) => [...s.slice(-19), { label: labelText, snaps }]);
+
+  const restore = useCallback(
+    async (snaps: Snapshot[]) => {
+      const byState = new Map<string, Snapshot[]>();
+      for (const s of snaps) {
+        const k = JSON.stringify(s.state);
+        byState.set(k, [...(byState.get(k) ?? []), s]);
+      }
+      await Promise.all(
+        [...byState.values()].map((g) =>
+          updateMailState(
+            g.map((s) => itemRef(s.item)),
+            g[0].state,
+          ),
+        ),
+      );
+      list.refresh();
+    },
+    [list],
+  );
 
   const undo = useCallback(async () => {
-    if (!undoEntry) return;
-    const entry = undoEntry;
-    setUndoEntry(null);
-    try {
-      await entry.run();
-      showToast({ kind: "info", message: `Undone: ${entry.label}` });
-    } finally {
-      setEarlier([]);
-      list.refresh();
+    const last = undoStack[undoStack.length - 1];
+    if (!last) {
+      showToast({ kind: "info", message: "Nothing to undo" });
+      return;
     }
-  }, [undoEntry, list]);
+    setUndoStack((s) => s.slice(0, -1));
+    try {
+      await restore(last.snaps);
+      showToast({ kind: "info", message: `Undone: ${last.label}` });
+    } catch {
+      showToast({ kind: "error", message: "Couldn't undo" });
+    }
+  }, [undoStack, restore]);
 
   // ── Actions ───────────────────────────────────────────────────────────
-  const removesOnArchive = folder !== "archive" && !(q && !scopeCurrent);
+  const serverFolder = query.folder;
+  const leaves = (patch: StatePatch): boolean => {
+    if (serverFolder === "inbox")
+      return !!patch.archived || (patch.snoozedUntil ?? null) !== null;
+    if (serverFolder === "archive") return patch.archived === false;
+    if (serverFolder === "snoozed") return patch.snoozedUntil === null;
+    if (serverFolder === "starred") return patch.starred === false;
+    return false;
+  };
+
+  const change = (
+    items: GroupedItem[],
+    patch: StatePatch,
+    labelText: string,
+    toast?: string,
+  ) => {
+    if (!items.length) return;
+    const snaps = snapshot(items);
+    const remove = leaves(patch);
+    if (remove) openNeighbour(items);
+    pushUndo(labelText, snaps);
+    void list.applyState(items, patch, remove).then((ok) => {
+      if (ok && toast)
+        showToast({
+          kind: "info",
+          message: toast,
+          action: {
+            label: "Undo",
+            onClick: (dismiss) => {
+              dismiss();
+              setUndoStack((s) => s.filter((e) => e.snaps !== snaps));
+              void restore(snaps);
+            },
+          },
+        });
+    });
+  };
+  const n = (items: GroupedItem[], one: string, many: string) =>
+    items.length === 1 ? one : `${items.length} ${many}`;
 
   const ops = {
-    archive: (items: GroupedItem[]) => {
-      if (!items.length) return;
-      openNeighbour(items);
-      patchEarlier(items, { archived: true }, removesOnArchive);
-      remember("Archive", items, { archived: false });
-      void list.actions.archive(items);
-    },
-    moveToInbox: (items: GroupedItem[]) => {
-      if (!items.length) return;
-      if (folder === "archive" || folder === "snoozed") openNeighbour(items);
-      patchEarlier(items, {}, folder === "archive" || folder === "snoozed");
-      const wasSnoozed = items.filter((i) => i.snoozedUntil);
-      remember("Move to Inbox", items, { archived: true });
-      void list.actions.unarchive(items);
-      if (wasSnoozed.length) void list.actions.unsnooze(wasSnoozed);
-    },
-    flag: (items: GroupedItem[], value?: boolean) => {
+    archive: (items: GroupedItem[]) =>
+      change(
+        items,
+        { archived: true },
+        "Archive",
+        n(items, "Conversation archived", "conversations archived"),
+      ),
+    moveToInbox: (items: GroupedItem[]) =>
+      change(
+        items,
+        { archived: false, snoozedUntil: null },
+        "Move to Inbox",
+        n(items, "Moved to Inbox", "conversations moved to Inbox"),
+      ),
+    flag: (items: GroupedItem[], value?: boolean, remindAt?: number | null) => {
       if (!items.length) return;
       const v = value ?? !items.every((i) => i.starred);
-      const remove = folder === "flagged" && !v;
-      if (remove) openNeighbour(items);
-      patchEarlier(items, { starred: v }, remove);
-      remember(v ? "Flag" : "Unflag", items, { starred: !v });
-      void list.actions.toggleStar(items, v);
+      const patch: StatePatch = { starred: v };
+      if (v && remindAt) patch.snoozedUntil = remindAt;
+      change(
+        items,
+        patch,
+        v ? "Flag" : "Clear flag",
+        remindAt
+          ? `Flagged. It comes back ${new Date(remindAt * 1000).toLocaleString([], { weekday: "short", hour: "numeric", minute: "2-digit" })}`
+          : undefined,
+      );
     },
     pin: (items: GroupedItem[], value?: boolean) => {
       if (!items.length) return;
       const v = value ?? !items.every((i) => i.pinned);
-      patchEarlier(items, { pinned: v }, false);
-      remember(v ? "Pin" : "Unpin", items, { pinned: !v });
-      void list.actions.togglePin(items, v);
+      change(items, { pinned: v }, v ? "Pin" : "Unpin");
     },
-    snooze: (items: GroupedItem[], until: number) => {
-      if (!items.length) return;
-      if (folder !== "snoozed") openNeighbour(items);
-      patchEarlier(items, { snoozedUntil: until }, folder !== "snoozed");
-      remember("Snooze", items, { snoozedUntil: null });
-      void list.actions.snooze(items, until);
-    },
-    markRead: (items: GroupedItem[]) => {
-      const unread = items.filter((i) => i.unreadCount > 0);
-      if (!unread.length) return;
-      patchEarlier(unread, { unreadCount: 0 }, false);
-      setUndoEntry(null);
-      void list.actions.markRead(unread);
-    },
+    snooze: (items: GroupedItem[], until: number) =>
+      change(
+        items,
+        { snoozedUntil: until },
+        "Snooze",
+        `Snoozed until ${new Date(until * 1000).toLocaleString([], {
+          weekday: "short",
+          month: "short",
+          day: "numeric",
+          hour: "numeric",
+          minute: "2-digit",
+        })}`,
+      ),
+    markRead: (items: GroupedItem[]) => void list.markRead(items),
     markUnread: async (items: GroupedItem[]) => {
       if (!items.length) return;
-      setUndoEntry(null);
-      patchEarlier(items, { unreadCount: 1 }, false);
+      list.patchLocal(items, { unreadCount: 1 });
       try {
         await Promise.all(
           items.map(async (it) => {
             const emails =
               it.type === "person"
                 ? (await fetchPersonEmails(it.id, { limit: 25 })).emails
-                : [...(await fetchConversationEmails(it.id)).emails].reverse();
-            const latest = emails.find((e) => e.type === "received");
+                : (await fetchConversationEmails(it.id)).emails;
+            const latest = [...emails]
+              .sort((a, b) => b.timestamp - a.timestamp)
+              .find((e) => e.type === "received");
             if (latest) await markEmailRead(latest.id, false);
           }),
         );
+        list.loadStats();
       } catch (e) {
         showToast({
           kind: "error",
           message: e instanceof Error ? e.message : "Could not mark unread",
         });
+        list.refresh();
       }
-      list.refresh();
     },
     toggleRead: (items: GroupedItem[]) => {
       if (items.some((i) => i.unreadCount > 0)) ops.markRead(items);
       else void ops.markUnread(items);
     },
-    delete: async (items: GroupedItem[]) => {
+    delete: async (items: GroupedItem[], opts?: { skipConfirm?: boolean }) => {
       const people = items.filter((i) => i.type === "person");
       if (people.length === 0) {
         showToast({
@@ -492,16 +608,22 @@ export function useOutlookMail() {
         });
         return;
       }
-      const ok = window.confirm(
-        people.length === 1
-          ? `Permanently delete the conversation with ${itemTitle(people[0])}? This can't be undone.`
-          : `Permanently delete ${people.length} conversations? This can't be undone.`,
-      );
-      if (!ok) return;
+      const skipped = items.length - people.length;
+      if (
+        !opts?.skipConfirm &&
+        !window.confirm(
+          (people.length === 1
+            ? `Permanently delete the conversation with ${itemTitle(people[0])}?`
+            : `Permanently delete ${people.length} conversations?`) +
+            " There is no Deleted Items folder here, so this can't be undone." +
+            (skipped
+              ? ` (${skipped} group conversation(s) will be skipped.)`
+              : ""),
+        )
+      )
+        return;
       openNeighbour(people);
-      patchEarlier(people, {}, true);
-      setUndoEntry(null);
-      await list.actions.deleteForever(people);
+      await list.deletePeople(people);
     },
     block: async (item: GroupedItem) => {
       if (item.type !== "person") {
@@ -521,7 +643,6 @@ export function useOutlookMail() {
         await addBlock({ type: "email", value: item.email });
         showToast({ kind: "success", message: `Blocked ${item.email}` });
         openNeighbour([item]);
-        setEarlier([]);
         list.refresh();
       } catch {
         showToast({
@@ -531,25 +652,150 @@ export function useOutlookMail() {
         });
       }
     },
-    markAllRead: () => ops.markRead(allItems),
+    /** Mark every unread row in a folder read (default: this view). */
+    markAllRead: async (target?: FolderTarget) => {
+      const fq = target ? folderQuery(target.folder) : query;
+      const recipient = target ? target.label : query.recipient;
+      const rows: GroupedItem[] = [];
+      try {
+        for (let page = 1; page <= 10; page++) {
+          const res = await fetchGroupedPeople({
+            ...fq,
+            recipient,
+            unread: true,
+            page,
+            limit: 100,
+          });
+          rows.push(...res.data);
+          if (rows.length >= res.total || res.data.length === 0) break;
+        }
+      } catch {
+        showToast({ kind: "error", message: "Couldn't mark all as read" });
+        return;
+      }
+      if (!rows.length) {
+        showToast({ kind: "info", message: "Everything here is already read" });
+        return;
+      }
+      await list.markRead(rows);
+      list.refresh();
+      showToast({
+        kind: "success",
+        message: `Marked ${rows.length} conversation${rows.length === 1 ? "" : "s"} as read`,
+      });
+    },
+    /** Outlook Sweep: archive or delete everything in the Inbox from a sender. */
+    sweep: async (sender: string, action: "archive" | "delete") => {
+      const res = await fetchGroupedPeople({
+        folder: "inbox",
+        recipient: label,
+        from: sender.replace(/^@/, ""),
+        limit: 100,
+      });
+      const rows = sweepSelection(res.data, sender);
+      if (!rows.length) {
+        showToast({
+          kind: "info",
+          message: `Nothing in the Inbox from ${sender}`,
+        });
+        return 0;
+      }
+      if (action === "archive") {
+        const snaps = snapshot(rows);
+        openNeighbour(rows);
+        pushUndo("Sweep", snaps);
+        list.patchLocal(rows, {}, serverFolder === "inbox");
+        await updateMailState(rows.map(itemRef), { archived: true });
+        showToast({
+          kind: "info",
+          message: `Moved ${rows.length} conversation${rows.length === 1 ? "" : "s"} from ${sender} to Archive`,
+          action: {
+            label: "Undo",
+            onClick: (dismiss) => {
+              dismiss();
+              void restore(snaps);
+            },
+          },
+        });
+        list.refresh();
+      } else {
+        await ops.delete(rows, { skipConfirm: true });
+      }
+      return rows.length;
+    },
+    /** Drag-and-drop / Move to: one call per destination folder. */
+    moveTo: (items: GroupedItem[], dest: MoveTarget, snoozeUntil?: number) => {
+      switch (dest) {
+        case "inbox":
+          return ops.moveToInbox(items);
+        case "archive":
+          return ops.archive(items);
+        case "deleted":
+          return void ops.delete(items);
+        case "flagged":
+          return ops.flag(items, true);
+        case "snoozed":
+          if (snoozeUntil) ops.snooze(items, snoozeUntil);
+      }
+    },
   };
 
   const goFolder = useCallback(
-    (t: FolderTarget) => navigate(folderHref(t)),
-    [navigate],
+    (t: FolderTarget) => {
+      o.closeCompose();
+      navigate(folderHref(t));
+    },
+    [navigate, o],
   );
 
+  const setQuery = useCallback(
+    (next: string, scope?: "all" | "current") => {
+      const p = new URLSearchParams(params);
+      p.delete("open");
+      if (next.trim()) {
+        p.set("q", next.trim());
+        if (scope === "current") p.set("scope", "current");
+        else if (scope === "all") p.delete("scope");
+      } else {
+        p.delete("q");
+        p.delete("scope");
+      }
+      navigate(`/?${p.toString()}`);
+    },
+    [params, navigate],
+  );
+
+  const identities = new Map(
+    (list.stats?.senderIdentities ?? []).map((s) => [s.email, s.displayName]),
+  );
   const folderTitle = q
     ? "Search results"
     : label
-      ? label
+      ? identities.get(label) || label
       : FOLDER_LABELS[folder];
+
+  // Expanded conversation rows (chevron in the list).
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  useEffect(() => setExpanded(new Set()), [folder, label, q]);
+  const toggleExpanded = useCallback(
+    (key: string) =>
+      setExpanded((s) => {
+        const next = new Set(s);
+        if (next.has(key)) next.delete(key);
+        else next.add(key);
+        return next;
+      }),
+    [],
+  );
 
   return {
     folder,
+    urlFolder,
     label,
     q,
+    parsed,
     scopeCurrent,
+    popout,
     folderTitle,
     filter,
     setFilter,
@@ -559,17 +805,20 @@ export function useOutlookMail() {
     setFocusTab,
     showFocusTabs,
     focusSplit,
+    otherUnread,
     list,
-    allItems,
+    allItems: list.items,
     filtered,
-    mobileItems,
+    visible,
     groups,
     order,
-    hasMore,
-    loadMore,
+    hasMore: list.hasMore,
+    loadMore: list.loadMore,
     selected,
     selectedItems,
     setSelected,
+    cursorKey,
+    setCursorKey,
     checkMode,
     setCheckMode,
     openKey,
@@ -578,13 +827,19 @@ export function useOutlookMail() {
     openItem,
     clickRow,
     toggleChecked,
+    actionRows,
     selectAll,
     clearSelection,
-    step,
+    step: (d: 1 | -1) => stepTo(d),
+    stepTo,
     ops,
     undo,
-    canUndo: !!undoEntry,
+    canUndo: undoStack.length > 0,
+    undoLabel: undoStack[undoStack.length - 1]?.label,
     goFolder,
+    setQuery,
+    expanded,
+    toggleExpanded,
   };
 }
 

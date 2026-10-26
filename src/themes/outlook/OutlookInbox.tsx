@@ -1,3 +1,4 @@
+import { MailUiProvider } from "./actions";
 import { useIsMobile } from "./context";
 import DesktopMail from "./DesktopMail";
 import MobileMail from "./MobileMail";
@@ -11,5 +12,9 @@ import { useOutlookMail } from "./useOutlookMail";
 export default function OutlookInbox() {
   const mail = useOutlookMail();
   const isMobile = useIsMobile();
-  return isMobile ? <MobileMail mail={mail} /> : <DesktopMail mail={mail} />;
+  return (
+    <MailUiProvider mail={mail}>
+      {isMobile ? <MobileMail mail={mail} /> : <DesktopMail mail={mail} />}
+    </MailUiProvider>
+  );
 }

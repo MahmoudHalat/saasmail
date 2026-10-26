@@ -1,42 +1,70 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import type { GroupedItem } from "@/lib/api";
 import { useSession } from "@/lib/auth-client";
 import { usePreferences } from "@/lib/preferences";
 import { cn } from "@/lib/utils";
 import { useMedia, useOutlook } from "./context";
-import FolderList from "./FolderList";
+import FolderList, { type DropTarget } from "./FolderList";
 import MessageList from "./MessageList";
 import ReadingPane from "./ReadingPane";
 import Ribbon from "./Ribbon";
-import { SnoozeDialog } from "./Snooze";
+import SearchRefiners from "./SearchRefiners";
 import { commandForKey, isTypingTarget } from "./lib";
-import { sendConversationCommand } from "./Conversation";
+import {
+  queueConversationCommand,
+  sendConversationCommand,
+} from "./Conversation";
+import { useMailUi } from "./actions";
 import type { OutlookMail } from "./useOutlookMail";
+import { itemKey } from "@/hooks/useMailList";
+
+/** Panes F6 cycles through, in Outlook's order. */
+const PANE_SELECTORS = [
+  ".ol-ribbon [role=tab][aria-selected=true]",
+  ".ol-folder-pane .ol-folder-on, .ol-folder-pane .ol-folder",
+  ".ol-list-scroll [tabindex='0'], .ol-list-scroll",
+  ".ol-reading-scroll, .ol-reading",
+];
 
 /** Outlook on the web keyboard shortcuts for the mail module. */
 function useShortcuts(mail: OutlookMail) {
   const o = useOutlook();
-  const ref = useRef({ mail, o });
-  ref.current = { mail, o };
+  const ui = useMailUi();
+  const ref = useRef({ mail, o, ui });
+  ref.current = { mail, o, ui };
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      const { mail, o } = ref.current;
-      if (e.defaultPrevented) return;
+      const { mail, o, ui } = ref.current;
+      if (e.defaultPrevented || e.isComposing) return;
       const cmd = commandForKey(e);
       if (!cmd) return;
       const typing = isTypingTarget(e.target);
-      // Ctrl+N and Esc still work from fields; everything else waits.
-      if (typing && cmd !== "newMail") return;
+      // Ctrl+N works from fields; everything else waits until you leave it.
+      if (typing && !(cmd === "newMail" && (e.ctrlKey || e.metaKey))) return;
       if (
-        document.querySelector("[role=dialog],[role=menu]") &&
-        cmd !== "close"
+        document.querySelector(
+          "[role=dialog][data-state=open], [role=menu][data-state=open], [role=alertdialog]",
+        )
       )
         return;
+      // Single-letter keys only act in the mail list / reading pane, not on
+      // buttons in the header where a user might be typing a shortcut.
       const t = mail.targets;
       const run = (fn: () => void) => {
         e.preventDefault();
         fn();
+      };
+      const conv = (c: "reply" | "replyAll" | "forward") => {
+        if (!t[0] || t.length !== 1) return;
+        run(() => {
+          if (mail.openKey === itemKey(t[0])) sendConversationCommand(c);
+          else {
+            queueConversationCommand(itemKey(t[0]), c);
+            mail.openItem(t[0]);
+          }
+        });
       };
       switch (cmd) {
         case "newMail":
@@ -44,13 +72,15 @@ function useShortcuts(mail: OutlookMail) {
         case "reply":
         case "replyAll":
         case "forward":
-          if (!mail.openedItem) return;
-          return run(() => sendConversationCommand(cmd));
+          return conv(cmd);
         case "delete":
           if (t.length) run(() => void mail.ops.delete(t));
           return;
         case "archive":
           if (t.length) run(() => mail.ops.archive(t));
+          return;
+        case "move":
+          if (t.length) run(() => ui.requestMove(t));
           return;
         case "flag":
           if (t.length) run(() => mail.ops.flag(t));
@@ -61,17 +91,20 @@ function useShortcuts(mail: OutlookMail) {
         case "markUnread":
           if (t.length) run(() => void mail.ops.markUnread(t));
           return;
+        case "undo":
+          return run(() => void mail.undo());
         case "next":
-          return run(() => mail.step(1));
+          return run(() => mail.stepTo(1));
         case "prev":
-          return run(() => mail.step(-1));
+          return run(() => mail.stepTo(-1));
+        case "first":
+          return run(() => mail.stepTo("first"));
+        case "last":
+          return run(() => mail.stepTo("last"));
         case "open": {
-          // Enter on a focused row opens it.
           const el = document.activeElement as HTMLElement | null;
           const key = el?.dataset?.key;
-          const it = key
-            ? mail.allItems.find((i) => `${i.type}:${i.id}` === key)
-            : null;
+          const it = key ? mail.allItems.find((i) => itemKey(i) === key) : null;
           if (it) run(() => mail.openItem(it));
           return;
         }
@@ -93,6 +126,32 @@ function useShortcuts(mail: OutlookMail) {
               .querySelector<HTMLElement>("[data-ribbon-tab=home]")
               ?.focus(),
           );
+        case "panes":
+          return run(() => {
+            const active = document.activeElement;
+            const panes = PANE_SELECTORS.map((s) =>
+              document.querySelector<HTMLElement>(s),
+            ).filter((x): x is HTMLElement => !!x);
+            const cur = panes.findIndex(
+              (p) =>
+                p === active ||
+                (active &&
+                  p
+                    .closest(
+                      ".ol-ribbon, .ol-folder-pane, .ol-list, .ol-reading",
+                    )
+                    ?.contains(active)),
+            );
+            const next =
+              panes[(cur + (e.shiftKey ? panes.length - 1 : 1)) % panes.length];
+            if (!next) return;
+            if (
+              !next.hasAttribute("tabindex") &&
+              !/^(BUTTON|A|INPUT)$/.test(next.tagName)
+            )
+              next.setAttribute("tabindex", "-1");
+            next.focus();
+          });
       }
     };
     window.addEventListener("keydown", onKey);
@@ -143,13 +202,14 @@ function Splitter({
 
 export default function DesktopMail({ mail }: { mail: OutlookMail }) {
   const o = useOutlook();
+  const ui = useMailUi();
   const navigate = useNavigate();
   const { data: session } = useSession();
   const { density } = usePreferences();
   const narrow = useMedia("(max-width: 1023px)");
-  const [snoozeOpen, setSnoozeOpen] = useState(false);
   const [dragW, setDragW] = useState<number | null>(null);
   const [bottomH, setBottomH] = useState(320);
+  const dragRows = useRef<GroupedItem[]>([]);
 
   useShortcuts(mail);
 
@@ -163,6 +223,27 @@ export default function DesktopMail({ mail }: { mail: OutlookMail }) {
     },
     [o],
   );
+
+  const onDropRows = (dest: DropTarget) => {
+    const rows = dragRows.current;
+    dragRows.current = [];
+    if (!rows.length) return;
+    if (dest === "snoozed") ui.requestSnooze(rows);
+    else mail.ops.moveTo(rows, dest);
+  };
+
+  // A popped-out conversation ("Open in new window") is just the reader.
+  useEffect(() => {
+    if (mail.popout)
+      document.title = mail.openedItem?.latestSubject || document.title;
+  }, [mail.popout, mail.openedItem]);
+  if (mail.popout) {
+    return (
+      <div className="ol-mail ol-popout">
+        <ReadingPane mail={mail} />
+      </div>
+    );
+  }
 
   const pane = o.readingPane;
   const listWidth = dragW ?? o.listWidth;
@@ -185,11 +266,7 @@ export default function DesktopMail({ mail }: { mail: OutlookMail }) {
         o.spacious && density !== "compact" && "ol-spacious",
       )}
     >
-      <Ribbon
-        mail={mail}
-        onNewMail={() => o.openCompose(null)}
-        onSnoozeCustom={() => setSnoozeOpen(true)}
-      />
+      <Ribbon mail={mail} onNewMail={() => o.openCompose(null)} />
       <div className="ol-mail-body">
         {o.folderPaneOpen && (
           <>
@@ -205,73 +282,82 @@ export default function DesktopMail({ mail }: { mail: OutlookMail }) {
                 "ol-folder-pane",
                 folderOverlay && "ol-folder-pane-over",
               )}
+              aria-label="Navigation pane"
             >
               <FolderList
                 stats={mail.list.stats}
                 accountEmail={session?.user?.email ?? ""}
-                current={{ folder: mail.folder, label: mail.label }}
+                current={{ folder: mail.urlFolder, label: mail.label }}
                 onSelect={(t) => {
                   mail.goFolder(t);
                   if (narrow) o.setLayout({ folderPaneOpen: false });
                 }}
                 onOutbox={() => navigate("/outbox")}
+                favorites={o.favorites}
+                favoritesOpen={o.favoritesOpen}
+                onFavoritesOpen={(v) => o.setLayout({ favoritesOpen: v })}
+                onToggleFavorite={o.toggleFavorite}
+                onMarkAllRead={(t) => void mail.ops.markAllRead(t)}
+                onDropRows={onDropRows}
               />
             </aside>
           </>
         )}
-        <div
-          className={cn(
-            "ol-panes",
-            pane === "bottom" ? "flex-col" : "flex-row",
-          )}
-        >
-          {showList && (
-            <div
-              className="ol-list-wrap"
-              style={
-                pane === "right"
-                  ? { width: listWidth }
-                  : pane === "bottom"
-                    ? { height: bottomH }
-                    : { flex: 1 }
-              }
-            >
-              <MessageList mail={mail} />
-            </div>
-          )}
-          {showList && pane === "right" && (
-            <Splitter orientation="vertical" onDrag={onDrag} />
-          )}
-          {showList && pane === "bottom" && (
-            <Splitter
-              orientation="horizontal"
-              onDrag={(d, done) => {
-                if (done)
-                  setBottomH((h) => Math.max(160, Math.min(640, h + d)));
-              }}
-            />
-          )}
-          {showReading && (
-            <ReadingPane
-              mail={mail}
-              onSnoozeCustom={() => setSnoozeOpen(true)}
-              onBack={
-                pane === "off"
-                  ? () => {
-                      if (o.compose) o.closeCompose();
-                      mail.clearSelection();
-                    }
-                  : undefined
-              }
-            />
-          )}
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-2">
+          {mail.q && <SearchRefiners mail={mail} />}
+          <div
+            className={cn(
+              "ol-panes",
+              pane === "bottom" ? "flex-col" : "flex-row",
+            )}
+          >
+            {showList && (
+              <div
+                className="ol-list-wrap"
+                style={
+                  pane === "right"
+                    ? { width: listWidth }
+                    : pane === "bottom"
+                      ? { height: bottomH }
+                      : { flex: 1 }
+                }
+              >
+                <MessageList
+                  mail={mail}
+                  onDragRows={(rows) => {
+                    dragRows.current = rows;
+                  }}
+                />
+              </div>
+            )}
+            {showList && pane === "right" && (
+              <Splitter orientation="vertical" onDrag={onDrag} />
+            )}
+            {showList && pane === "bottom" && (
+              <Splitter
+                orientation="horizontal"
+                onDrag={(d, done) => {
+                  if (done)
+                    setBottomH((h) => Math.max(160, Math.min(640, h + d)));
+                }}
+              />
+            )}
+            {showReading && (
+              <ReadingPane
+                mail={mail}
+                onBack={
+                  pane === "off"
+                    ? () => {
+                        if (o.compose) o.closeCompose();
+                        mail.clearSelection();
+                      }
+                    : undefined
+                }
+              />
+            )}
+          </div>
         </div>
       </div>
-      <SnoozeDialog
-        open={snoozeOpen}
-        onOpenChange={setSnoozeOpen}
-        onPick={(u) => mail.ops.snooze(mail.targets, u)}
-      />
     </div>
   );
 }

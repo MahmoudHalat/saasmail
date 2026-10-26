@@ -12,6 +12,13 @@ import {
   rangeKeys,
   splitFocused,
   swipeOutcome,
+  parseSearchQuery,
+  buildSearchQuery,
+  sweepSelection,
+  groupParticipants,
+  favoriteKey,
+  parseFavorite,
+  DEFAULT_FAVORITES,
 } from "../lib";
 
 // Thu 22 Oct 2026, 14:00 local.
@@ -93,15 +100,20 @@ describe("groupRows", () => {
 });
 
 describe("splitFocused", () => {
-  it("treats replied, flagged and pinned rows as Focused", () => {
+  it("puts primary, flagged and pinned rows in Focused, the rest in Other", () => {
     const { focused, other } = splitFocused([
-      row("replied", { hasSent: true }),
-      row("flagged", { starred: true }),
-      row("pinned", { pinned: true }),
-      row("cold"),
+      row("primary", { category: "primary" }),
+      row("promo-flagged", { category: "promotions", starred: true }),
+      row("social-pinned", { category: "social", pinned: true }),
+      row("updates", { category: "updates" }),
+      row("promo", { category: "promotions" }),
     ]);
-    expect(focused.map((i) => i.id)).toEqual(["replied", "flagged", "pinned"]);
-    expect(other.map((i) => i.id)).toEqual(["cold"]);
+    expect(focused.map((i) => i.id)).toEqual([
+      "primary",
+      "promo-flagged",
+      "social-pinned",
+    ]);
+    expect(other.map((i) => i.id)).toEqual(["updates", "promo"]);
   });
 });
 
@@ -144,7 +156,20 @@ describe("commandForKey", () => {
     expect(commandForKey({ key: "ArrowDown" })).toBe("next");
     expect(commandForKey({ key: "?", shiftKey: true })).toBe("help");
     expect(commandForKey({ key: "x" })).toBeNull();
-    expect(commandForKey({ key: "z", ctrlKey: true })).toBeNull();
+    expect(commandForKey({ key: "V", ctrlKey: true, shiftKey: true })).toBe(
+      "move",
+    );
+    expect(commandForKey({ key: "Delete", shiftKey: true })).toBe("delete");
+    expect(commandForKey({ key: "q" })).toBe("markRead");
+    expect(commandForKey({ key: "u" })).toBe("markUnread");
+    expect(commandForKey({ key: "z", metaKey: true })).toBe("undo");
+    expect(commandForKey({ key: ".", ctrlKey: true })).toBe("next");
+    expect(commandForKey({ key: ",", ctrlKey: true })).toBe("prev");
+    expect(commandForKey({ key: "Home" })).toBe("first");
+    expect(commandForKey({ key: "End" })).toBe("last");
+    expect(commandForKey({ key: "F6" })).toBe("panes");
+    expect(commandForKey({ key: "/" })).toBe("search");
+    expect(commandForKey({ key: "k", ctrlKey: true })).toBeNull();
   });
 });
 
@@ -167,8 +192,87 @@ describe("misc helpers", () => {
   });
 
   it("decides swipe outcomes past a threshold", () => {
-    expect(swipeOutcome(150, 390)).toBe("archive");
-    expect(swipeOutcome(-150, 390)).toBe("flag");
+    expect(swipeOutcome(150, 390)).toBe("right");
+    expect(swipeOutcome(-150, 390)).toBe("left");
     expect(swipeOutcome(40, 390)).toBeNull();
+  });
+});
+
+describe("parseSearchQuery", () => {
+  it("pulls Outlook keywords out of the text", () => {
+    const p = parseSearchQuery(
+      'invoice from:"Vera Wayne" hasattachments:yes isread:no isflagged:yes folder:archive to:support@example.com',
+    );
+    expect(p).toMatchObject({
+      text: "invoice",
+      from: "Vera Wayne",
+      hasAttachment: true,
+      unread: true,
+      flagged: true,
+      folder: "archive",
+      to: "support@example.com",
+    });
+  });
+
+  it("handles isread:yes, unknown keywords and dates", () => {
+    const p = parseSearchQuery("isread:yes subject:hello received>=2026-01-01");
+    expect(p.unread).toBe(false);
+    expect(p.text).toBe("subject:hello");
+    expect(p.after).toBe(Math.floor(Date.parse("2026-01-01") / 1000));
+  });
+
+  it("round-trips through buildSearchQuery", () => {
+    const q = "from:bob hasattachments:yes isread:no report";
+    expect(parseSearchQuery(buildSearchQuery(parseSearchQuery(q)))).toEqual(
+      parseSearchQuery(q),
+    );
+  });
+});
+
+describe("sweepSelection", () => {
+  const items = [
+    row("a", { email: "news@shop.test" } as Partial<GroupedItem>),
+    row("b", { email: "deals@shop.test" } as Partial<GroupedItem>),
+    row("c", { email: "vera@piedpiper.ai" } as Partial<GroupedItem>),
+  ];
+  it("matches one sender exactly, case-insensitively", () => {
+    expect(sweepSelection(items, "NEWS@shop.test").map((i) => i.id)).toEqual([
+      "a",
+    ]);
+  });
+  it("matches a whole domain with a leading @", () => {
+    expect(sweepSelection(items, "@shop.test").map((i) => i.id)).toEqual([
+      "a",
+      "b",
+    ]);
+  });
+  it("matches nothing for an empty sender", () => {
+    expect(sweepSelection(items, " ")).toEqual([]);
+  });
+});
+
+describe("group titles and favorites", () => {
+  it("lists every participant, then Cc, once", () => {
+    const g = {
+      type: "group",
+      id: "c1",
+      inbox: "billing@x.test",
+      participants: [{ id: "p1", email: "vera@x.test", name: "Vera Wayne" }],
+      ccParticipants: [
+        { email: "bob@x.test", name: "Bob Brown" },
+        { email: "VERA@x.test", name: "Vera" },
+      ],
+    } as unknown as Extract<GroupedItem, { type: "group" }>;
+    expect(groupParticipants(g)).toBe("Vera Wayne; Bob Brown");
+  });
+  it("encodes favorites and does not repeat Inbox by default", () => {
+    expect(favoriteKey("inbox", "support@x.test")).toBe("label:support@x.test");
+    expect(parseFavorite("label:support@x.test")).toEqual({
+      folder: "inbox",
+      label: "support@x.test",
+    });
+    expect(parseFavorite("flagged")).toEqual({ folder: "flagged" });
+    expect(parseFavorite("bogus")).toBeNull();
+    expect(DEFAULT_FAVORITES).not.toContain("inbox");
   });
 });

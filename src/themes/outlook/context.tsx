@@ -8,6 +8,8 @@ import {
   type ReactNode,
 } from "react";
 import type { ComposePrefill } from "@/pages/ComposeModal";
+import { fetchStats } from "@/lib/api";
+import { DEFAULT_FAVORITES, type SwipeAction } from "./lib";
 
 /**
  * State shared between the Outlook shell (suite header, settings flyout,
@@ -16,8 +18,27 @@ import type { ComposePrefill } from "@/pages/ComposeModal";
  */
 
 export type ReadingPanePos = "right" | "bottom" | "off";
+export type QuickAction = "delete" | "archive" | "flag" | "pin" | "read";
+export const ALL_QUICK_ACTIONS: QuickAction[] = [
+  "delete",
+  "archive",
+  "flag",
+  "pin",
+  "read",
+];
+export type ShowAs = "conversations" | "messages";
 
 interface LayoutPrefs {
+  /** Focused Inbox (Focused / Other pivot). */
+  focusedInbox: boolean;
+  /** Hover actions shown on message list rows. */
+  quickActions: QuickAction[];
+  /** Folder keys pinned to Favorites (see lib.favoriteKey). */
+  favorites: string[];
+  favoritesOpen: boolean;
+  showAs: ShowAs;
+  swipeRight: SwipeAction;
+  swipeLeft: SwipeAction;
   readingPane: ReadingPanePos;
   conversationView: boolean;
   folderPaneOpen: boolean;
@@ -28,6 +49,13 @@ interface LayoutPrefs {
 
 const LAYOUT_KEY = "saasmail.outlook.layout";
 const DEFAULT_LAYOUT: LayoutPrefs = {
+  focusedInbox: true,
+  quickActions: ALL_QUICK_ACTIONS,
+  favorites: DEFAULT_FAVORITES,
+  favoritesOpen: true,
+  showAs: "conversations",
+  swipeRight: "archive",
+  swipeLeft: "flag",
   readingPane: "right",
   conversationView: true,
   folderPaneOpen: true,
@@ -40,7 +68,31 @@ function readLayout(): LayoutPrefs {
     const raw = window.localStorage.getItem(LAYOUT_KEY);
     if (!raw) return DEFAULT_LAYOUT;
     const r = JSON.parse(raw) as Partial<LayoutPrefs>;
+    const swipes: SwipeAction[] = [
+      "archive",
+      "delete",
+      "flag",
+      "read",
+      "snooze",
+      "move",
+      "none",
+    ];
     return {
+      focusedInbox: r.focusedInbox !== false,
+      quickActions: Array.isArray(r.quickActions)
+        ? r.quickActions.filter((a) => ALL_QUICK_ACTIONS.includes(a))
+        : DEFAULT_LAYOUT.quickActions,
+      favorites: Array.isArray(r.favorites)
+        ? r.favorites.filter((f) => typeof f === "string")
+        : DEFAULT_LAYOUT.favorites,
+      favoritesOpen: r.favoritesOpen !== false,
+      showAs: r.showAs === "messages" ? "messages" : "conversations",
+      swipeRight: swipes.includes(r.swipeRight as SwipeAction)
+        ? (r.swipeRight as SwipeAction)
+        : DEFAULT_LAYOUT.swipeRight,
+      swipeLeft: swipes.includes(r.swipeLeft as SwipeAction)
+        ? (r.swipeLeft as SwipeAction)
+        : DEFAULT_LAYOUT.swipeLeft,
       readingPane: (["right", "bottom", "off"] as const).includes(
         r.readingPane as ReadingPanePos,
       )
@@ -75,6 +127,10 @@ export interface ComposeState {
 
 interface OutlookContextValue extends LayoutPrefs {
   setLayout: (patch: Partial<LayoutPrefs>) => void;
+  toggleFavorite: (key: string) => void;
+  /** Our inbox addresses (lower-case), for to: search mapping. */
+  knownInboxes: string[];
+  isMobile: boolean;
   compose: ComposeState | null;
   openCompose: (prefill?: ComposePrefill | null) => void;
   closeCompose: () => void;
@@ -115,6 +171,21 @@ export function OutlookProvider({
   const setLayout = useCallback((patch: Partial<LayoutPrefs>) => {
     setLayoutState((prev) => ({ ...prev, ...patch }));
   }, []);
+  const toggleFavorite = useCallback((key: string) => {
+    setLayoutState((prev) => ({
+      ...prev,
+      favorites: prev.favorites.includes(key)
+        ? prev.favorites.filter((f) => f !== key)
+        : [...prev.favorites, key],
+    }));
+  }, []);
+  const [knownInboxes, setKnownInboxes] = useState<string[]>([]);
+  useEffect(() => {
+    fetchStats()
+      .then((s) => setKnownInboxes(s.recipients.map((r) => r.toLowerCase())))
+      .catch(() => {});
+  }, []);
+  const isMobile = useIsMobile();
 
   useEffect(() => {
     try {
@@ -136,6 +207,9 @@ export function OutlookProvider({
     () => ({
       ...layout,
       setLayout,
+      toggleFavorite,
+      knownInboxes,
+      isMobile,
       compose,
       openCompose,
       closeCompose,
@@ -154,6 +228,9 @@ export function OutlookProvider({
     [
       layout,
       setLayout,
+      toggleFavorite,
+      knownInboxes,
+      isMobile,
       compose,
       openCompose,
       closeCompose,

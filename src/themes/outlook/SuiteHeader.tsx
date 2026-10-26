@@ -5,6 +5,7 @@ import {
   ChevronDown,
   FileText,
   Grid3x3,
+  History,
   HelpCircle,
   Inbox as InboxIcon,
   Key,
@@ -68,6 +69,26 @@ export async function doSignOut(navigate: (to: string) => void) {
   }
 }
 
+const RECENT_KEY = "saasmail.outlook.recentSearches";
+function readRecent(): string[] {
+  try {
+    const v = JSON.parse(window.localStorage.getItem(RECENT_KEY) || "[]");
+    return Array.isArray(v)
+      ? v.filter((x) => typeof x === "string").slice(0, 6)
+      : [];
+  } catch {
+    return [];
+  }
+}
+function rememberSearch(q: string) {
+  try {
+    const next = [q, ...readRecent().filter((r) => r !== q)].slice(0, 6);
+    window.localStorage.setItem(RECENT_KEY, JSON.stringify(next));
+  } catch {
+    /* ignore */
+  }
+}
+
 function SearchBox() {
   const navigate = useNavigate();
   const location = useLocation();
@@ -80,6 +101,7 @@ function SearchBox() {
     params.get("scope") === "current" ? "current" : "all",
   );
   const [focused, setFocused] = useState(false);
+  const recent = useMemo(() => (focused ? readRecent() : []), [focused]);
   const [suggestions, setSuggestions] = useState<GroupedItem[]>([]);
   const [active, setActive] = useState(-1);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -117,6 +139,7 @@ function SearchBox() {
   }, []);
 
   function submit(text: string) {
+    if (text.trim()) rememberSearch(text.trim());
     const next = new URLSearchParams(onInbox ? params : undefined);
     next.delete("open");
     if (text.trim()) {
@@ -219,6 +242,32 @@ function SearchBox() {
       )}
       {focused && (
         <div id="ol-search-suggest" role="listbox" className="ol-search-pop">
+          {!q.trim() && recent.length > 0 && (
+            <>
+              <div className="ol-search-pop-label">Recent searches</div>
+              {recent.map((r) => (
+                <button
+                  key={r}
+                  type="button"
+                  className="ol-search-item"
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={() => {
+                    setQ(r);
+                    submit(r);
+                  }}
+                >
+                  <History
+                    size={16}
+                    className="mx-1.5 text-text-secondary"
+                    aria-hidden
+                  />
+                  <span className="truncate text-[13px] text-text-primary">
+                    {r}
+                  </span>
+                </button>
+              ))}
+            </>
+          )}
           <div className="ol-search-pop-label">
             {q.trim() ? "People" : "Recent people"}
           </div>
@@ -251,6 +300,10 @@ function SearchBox() {
               </span>
             </button>
           ))}
+          <div className="ol-search-tip">
+            Tip: from:name, hasattachments:yes, isread:no, isflagged:yes,
+            folder:archive, received&gt;=2026-01-01
+          </div>
           {q.trim() && (
             <button
               type="button"
