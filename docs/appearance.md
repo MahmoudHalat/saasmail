@@ -7,26 +7,42 @@ follows them to every browser and phone they sign in on.
 
 Open **Settings → Appearance** (or the theme switch in the account menu) to choose:
 
-| Setting     | Options                                         |
-| ----------- | ----------------------------------------------- |
-| Mail layout | **Default**, **Gmail-style**, **Outlook-style** |
-| Colour mode | Light, Dark, System (follows the device)        |
-| Density     | Comfortable, Compact                            |
+| Setting                       | Options                                                                              |
+| ----------------------------- | ------------------------------------------------------------------------------------ |
+| Mail layout                   | **Default**, **Gmail-style**, **Outlook-style**                                      |
+| Colour mode                   | Light, Dark, System (follows the device)                                             |
+| Density                       | Comfortable, Compact                                                                 |
+| Colour theme (Default layout) | Navy, Ink, Slate, Indigo, Forest, Claret, Paper — each with a light and dark version |
 
 ## The three layouts
 
 - **Default** — saasmail's own design: a navy navigation rail and top band around
   one light work panel, with an indigo accent (emerald in dark mode). One
   timeline per customer, as described in [Inboxes and timelines](inboxes.md).
+  Keyboard triage (`j`/`k`, `e` archive, `b` snooze, `s` star, `r` reply, `/`
+  search, `?` for the full list), a ⌘K command palette, and swipe actions on
+  phones.
 - **Gmail-style** — for people who live in Gmail: a Compose button and folder list
   on the left, a full-width message list with stars and hover actions, the
-  conversation opening in place of the list, Gmail keyboard shortcuts, and on
-  phones the floating search bar, swipe to archive and the Compose button.
+  conversation opening in place of the list (or a reading pane right/below),
+  Primary / Promotions / Social / Updates tabs, right-click menus, drag to
+  folders, search operators (`from:`, `is:unread`, `has:attachment`, `in:`,
+  `label:`…) with chips and suggestions, Gmail keyboard shortcuts including `g`
+  and `*` sequences and `z` undo, and on phones the floating search bar,
+  configurable swipes, selection mode and the Compose button.
 - **Outlook-style** — for people who live in Outlook: the blue header, an app bar,
   a ribbon (New mail, Delete, Archive, Reply, Flag, Pin, Snooze…), a folder pane,
-  the message list grouped by date with a reading pane beside it, Outlook keyboard
-  shortcuts, and on phones the Focused/Other switch, swipe actions and the round
-  New mail button.
+  the message list grouped by date with Focused / Other, expandable
+  conversations, hover quick actions, right-click menus, drag to folders, Sweep,
+  a reading pane (right, bottom or off), search refiners and query syntax
+  (`from:`, `hasattachments:yes`, `isread:no`…), Outlook keyboard shortcuts and
+  `Ctrl+Z` undo, and on phones Focused/Other, configurable swipes, action sheets
+  and the round New mail button.
+
+Tabs and Focused/Other use a category on each conversation: bulk mail (a
+`List-Unsubscribe` header) is Promotions, social networks are Social, automated
+senders (`no-reply@`, `notifications@`…) and mail only ever sent to a
+notifications-style inbox are Updates, and everything else is Primary / Focused.
 
 All three show the same mail and the same pages (templates, sequences, settings,
 admin); only the layout and look change. Every layout has a light and a dark mode.
@@ -57,12 +73,12 @@ the preview.
 
 ## API
 
-| Endpoint                          | Use                                                                                                                                                                                                |
-| --------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `GET /api/user/preferences`       | `{ uiTheme, colorMode, density }` for the signed-in user                                                                                                                                           |
-| `PATCH /api/user/preferences`     | Change any of them                                                                                                                                                                                 |
-| `PATCH /api/mail-state`           | Star, pin, archive or snooze up to 100 rows: `{ items: [{ type: "person" \| "group", id }], starred?, pinned?, archived?, snoozedUntil? }` (unix seconds; `null` wakes)                            |
-| `GET /api/people/grouped?folder=` | `all` (default, ignores the state above), `inbox`, `starred`, `snoozed`, `archive`, `sent`. Rows carry `starred`, `pinned`, `archivedAt`, `snoozedUntil`, `hasSent`, `latestSubject` and `snippet` |
+| Endpoint                                                         | Use                                                                                                                                                                                                |
+| ---------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GET /api/user/preferences`                                      | `{ uiTheme, colorMode, density }` for the signed-in user                                                                                                                                           |
+| `PATCH /api/user/preferences`                                    | Change any of them                                                                                                                                                                                 |
+| `PATCH /api/mail-state`                                          | Star, pin, archive or snooze up to 100 rows: `{ items: [{ type: "person" \| "group", id }], starred?, pinned?, archived?, snoozedUntil? }` (unix seconds; `null` wakes)                            |
+| `GET /api/people/grouped?folder=&category=&from=&hasAttachment=` | `all` (default, ignores the state above), `inbox`, `starred`, `snoozed`, `archive`, `sent`. Rows carry `starred`, `pinned`, `archivedAt`, `snoozedUntil`, `hasSent`, `latestSubject` and `snippet` |
 
 The state lives in two tables, `user_preferences` and `mail_item_states`
 (migration `0048`).
