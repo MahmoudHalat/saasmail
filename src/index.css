@@ -797,3 +797,8 @@ body {
   animation: message-link-flash 2200ms ease-out 1;
   border-radius: 6px;
 }
+
+/* The mobile Compose button would cover an open thread's reply bar. */
+html:has([data-thread-open]) .compose-fab {
+  display: none;
+}

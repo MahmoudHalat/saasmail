@@ -830,7 +830,12 @@ export default function InboxPage() {
   );
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col px-0 pb-0 pt-0 sm:px-5 sm:pb-5 sm:pt-4 lg:px-6">
+    <div
+      className="flex min-h-0 flex-1 flex-col px-0 pb-0 pt-0 sm:px-5 sm:pb-5 sm:pt-4 lg:px-6"
+      // Lets the shell hide the mobile Compose button while a thread (with
+      // its own reply bar) is open — see .compose-fab in src/index.css.
+      data-thread-open={selectedPerson || selectedConversation ? "" : undefined}
+    >
       {/* Header + filters. Hidden while a thread is open in table view, and
           on phones while a thread is open (the thread has its own header). */}
       {!(view === "table" && (selectedPerson || selectedConversation)) && (

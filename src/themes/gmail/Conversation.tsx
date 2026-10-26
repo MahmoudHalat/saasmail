@@ -368,7 +368,10 @@ export default function Conversation({
   const [error, setError] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [showAll, setShowAll] = useState(false);
-  const [replyTo, setReplyTo] = useState<{ id: string } | null>(null);
+  const [replyTo, setReplyTo] = useState<{
+    id: string;
+    all: boolean;
+  } | null>(null);
   const [original, setOriginal] = useState<Email | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const markedRef = useRef<string | null>(null);
@@ -509,9 +512,9 @@ export default function Conversation({
     return { name: senderOf(target).name, email: addr ?? "" };
   };
 
-  const startReply = (target: Email | null) => {
+  const startReply = (target: Email | null, all = false) => {
     if (!target) return;
-    setReplyTo({ id: target.id });
+    setReplyTo({ id: target.id, all });
   };
 
   const forward = (target: Email | null) => {
@@ -541,7 +544,7 @@ export default function Conversation({
   if (handleRef) {
     handleRef.current = {
       reply: () => startReply(replyTarget),
-      replyAll: () => startReply(replyTarget),
+      replyAll: () => startReply(replyTarget, true),
       forward: () => forward(latest),
     };
   }
@@ -858,7 +861,7 @@ export default function Conversation({
               <button
                 type="button"
                 className="gm-pill-btn"
-                onClick={() => startReply(replyTarget)}
+                onClick={() => startReply(replyTarget, true)}
               >
                 <ReplyAll size={20} /> Reply all
               </button>
@@ -889,7 +892,7 @@ export default function Conversation({
             <button
               type="button"
               className="gm-pill-btn gm-compact"
-              onClick={() => startReply(replyTarget)}
+              onClick={() => startReply(replyTarget, true)}
             >
               <ReplyAll size={20} /> Reply all
             </button>
@@ -912,7 +915,9 @@ export default function Conversation({
           const ib = inboxOf(target);
           return (
             <ReplyComposer
+              key={`${target.id}:${replyTo.all}`}
               emailId={target.id}
+              replyAll={replyTo.all}
               personName={party.name}
               personEmail={party.email}
               recipients={ib ? [ib] : inboxes}
