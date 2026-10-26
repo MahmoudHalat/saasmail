@@ -243,12 +243,11 @@ export default function ComposeModal({
           className={trayContentClass({ fullscreen, width: "compose" })}
         >
           {/* Slim single-row header — title + max/close. */}
-          <div className="flex h-11 shrink-0 items-center justify-between gap-2 border-b border-border bg-card px-3 pl-4">
+          <div className="flex h-12 shrink-0 items-center justify-between gap-2 border-b border-border bg-card px-2.5 pl-4">
             <div className="flex min-w-0 items-center gap-2">
               <PenSquare
-                size={13}
-                className="shrink-0"
-                style={{ color: "#7c5cfc" }}
+                size={15}
+                className="shrink-0 text-text-secondary"
                 aria-hidden
               />
               <DialogPrimitive.Title className="truncate text-sm font-semibold text-text-primary">
@@ -261,7 +260,7 @@ export default function ComposeModal({
                 onToggle={() => setFullscreen((v) => !v)}
               />
               <DialogPrimitive.Close
-                className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-[6px] text-text-tertiary transition-colors hover:bg-bg-muted hover:text-text-primary"
+                className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-text-secondary transition-colors hover:bg-bg-muted hover:text-text-primary"
                 aria-label="Close"
               >
                 <X size={14} />
@@ -273,7 +272,7 @@ export default function ComposeModal({
               a single inline row with no grid label column — keeps the
               chrome closer to ~150px so the body has more room. */}
           <div
-            className="shrink-0 divide-y divide-border/60 border-b border-border bg-bg-subtle/30"
+            className="shrink-0 divide-y divide-border-subtle border-b border-border bg-card"
             data-testid="compose-metadata"
           >
             <TrayMetaRow label="From">
@@ -281,7 +280,7 @@ export default function ComposeModal({
                 value={fromAddress}
                 onChange={(e) => setFromAddress(e.target.value)}
                 required
-                className="w-full bg-transparent py-2 pr-3 text-sm text-text-primary outline-none"
+                className="w-full bg-transparent py-2.5 pr-3 text-sm text-text-primary outline-none"
               >
                 {recipients.map((r) => (
                   <option key={r} value={r}>
@@ -299,7 +298,7 @@ export default function ComposeModal({
                 required
                 placeholder="recipient@example.com"
                 aria-label="To"
-                className="w-full bg-transparent py-2 pr-3 text-sm text-text-primary outline-none placeholder:text-text-tertiary"
+                className="w-full bg-transparent py-2.5 pr-3 text-sm text-text-primary outline-none placeholder:text-text-tertiary"
               />
             </TrayMetaRow>
             <TrayMetaRow label="Cc">
@@ -318,7 +317,7 @@ export default function ComposeModal({
                 required
                 placeholder="What's it about?"
                 aria-label="Subject"
-                className="w-full bg-transparent py-2 pr-3 text-sm text-text-primary outline-none placeholder:text-text-tertiary"
+                className="w-full bg-transparent py-2.5 pr-3 text-sm text-text-primary outline-none placeholder:text-text-tertiary"
               />
             </TrayMetaRow>
           </div>
@@ -352,7 +351,7 @@ export default function ComposeModal({
                 <div
                   data-signature
                   data-testid="compose-signature-preview"
-                  className="mt-4 border-t border-border/60 pt-3 opacity-70"
+                  className="mt-4 border-t border-border-subtle pt-3 text-text-secondary opacity-80"
                   // Read-only signature preview. Auto-attached at send time;
                   // edited via the admin Inboxes page rather than inline.
                   // Pre-sanitized via sanitizeEmailHtml — see safeSignatureHtml.
@@ -363,18 +362,23 @@ export default function ComposeModal({
           </div>
 
           {/* Slim footer — single row, just send + cancel + hint. */}
-          <div className="flex shrink-0 items-center justify-between gap-3 border-t border-border bg-card px-4 py-2.5 sm:px-5">
-            <div className="min-w-0 truncate text-[11px] font-light text-text-tertiary">
+          <div
+            className="flex shrink-0 items-center justify-between gap-3 border-t border-border bg-card px-4 pt-2.5 sm:px-5"
+            style={{
+              paddingBottom: "max(0.625rem, env(safe-area-inset-bottom))",
+            }}
+          >
+            <div className="min-w-0 truncate text-xs text-text-tertiary">
               {error ? (
                 <span className="text-destructive" role="alert">
                   {error}
                 </span>
               ) : (
                 <span className="hidden sm:inline">
-                  <kbd className="rounded border border-border bg-bg-muted px-1 font-mono text-[10px]">
+                  <kbd className="rounded border border-border bg-bg-subtle px-1 font-sans text-[11px]">
                     ⌘
                   </kbd>
-                  <kbd className="ml-1 rounded border border-border bg-bg-muted px-1 font-mono text-[10px]">
+                  <kbd className="ml-1 rounded border border-border bg-bg-subtle px-1 font-sans text-[11px]">
                     Enter
                   </kbd>{" "}
                   to send
@@ -386,12 +390,12 @@ export default function ComposeModal({
                 onFilesAdded={(added) =>
                   setFiles((prev) => [...prev, ...added])
                 }
-                buttonClassName="inline-flex items-center justify-center rounded-[6px] p-1.5 text-text-tertiary transition-colors hover:bg-bg-muted hover:text-text-primary"
+                buttonClassName="inline-flex h-9 w-9 items-center justify-center rounded-lg text-text-secondary transition-colors hover:bg-bg-muted hover:text-text-primary"
               />
               <button
                 type="button"
                 onClick={onClose}
-                className="rounded-[6px] border border-border bg-card px-3 py-1.5 text-xs font-medium text-text-secondary transition-colors hover:bg-bg-muted hover:text-text-primary"
+                className="inline-flex h-9 items-center rounded-lg px-3 text-[13.5px] font-medium text-text-secondary transition-colors hover:bg-bg-muted hover:text-text-primary"
               >
                 Cancel
               </button>
@@ -405,9 +409,9 @@ export default function ComposeModal({
                   !to ||
                   totalAttachmentBytes > ATTACHMENT_CAP_BYTES
                 }
-                className="inline-flex items-center gap-1.5 rounded-[6px] bg-text-primary px-3 py-1.5 text-xs font-medium text-white shadow-sm transition-colors hover:bg-text-primary/90 disabled:cursor-not-allowed disabled:opacity-50"
+                className="inline-flex h-9 items-center gap-2 rounded-lg bg-accent px-4 text-[13.5px] font-medium text-accent-foreground shadow-card transition-colors hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-50"
               >
-                <Send size={12} />
+                <Send size={14} />
                 {sending ? "Sending…" : "Send"}
               </button>
             </div>

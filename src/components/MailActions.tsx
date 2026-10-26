@@ -1,0 +1,320 @@
+import type { ReactNode } from "react";
+import {
+  Archive,
+  ArchiveRestore,
+  BellOff,
+  CheckCheck,
+  Clock,
+  MoreHorizontal,
+  Pin,
+  PinOff,
+  Star,
+  Trash2,
+} from "lucide-react";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { snoozePresets } from "@/hooks/useMailList";
+import { cn } from "@/lib/utils";
+
+/** Per-user mail state a row or thread header shows actions for. */
+export interface MailStateLike {
+  starred: boolean;
+  pinned: boolean;
+  archivedAt: number | null;
+  snoozedUntil: number | null;
+}
+
+/** Callbacks the inbox wires to updateMailState. All optional. */
+export interface MailActionHandlers {
+  onToggleStar?: () => void;
+  onTogglePin?: () => void;
+  /** Archive, or move back to the inbox when already archived. */
+  onArchive?: () => void;
+  /** Snooze until a unix-seconds time; null wakes the row. */
+  onSnooze?: (until: number | null) => void;
+  onMarkRead?: () => void;
+  onDelete?: () => void;
+}
+
+function snoozeLabel(until: number) {
+  const d = new Date(until * 1000);
+  return d.toLocaleString([], {
+    weekday: "short",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
+
+function presetTime(until: number) {
+  return new Date(until * 1000).toLocaleString([], {
+    weekday: "short",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
+
+/** Items for a snooze menu: the presets, plus "Unsnooze" when snoozed. */
+export function SnoozeItems({
+  state,
+  onSnooze,
+}: {
+  state?: Pick<MailStateLike, "snoozedUntil">;
+  onSnooze: (until: number | null) => void;
+}) {
+  return (
+    <>
+      <DropdownMenuLabel>Snooze until</DropdownMenuLabel>
+      {snoozePresets().map((p) => (
+        <DropdownMenuItem key={p.id} onSelect={() => onSnooze(p.until)}>
+          <span className="flex-1">{p.label}</span>
+          <span className="text-xs text-text-tertiary">
+            {presetTime(p.until)}
+          </span>
+        </DropdownMenuItem>
+      ))}
+      {state?.snoozedUntil ? (
+        <>
+          <DropdownMenuSeparator />
+          <DropdownMenuItem onSelect={() => onSnooze(null)}>
+            <BellOff /> Unsnooze
+          </DropdownMenuItem>
+        </>
+      ) : null}
+    </>
+  );
+}
+
+/** Small square icon button used in row hover bars and thread headers. */
+export function IconAction({
+  label,
+  onClick,
+  children,
+  active,
+  className,
+  testId,
+}: {
+  label: string;
+  onClick?: (e: React.MouseEvent) => void;
+  children: ReactNode;
+  active?: boolean;
+  className?: string;
+  testId?: string;
+}) {
+  return (
+    <button
+      type="button"
+      aria-label={label}
+      title={label}
+      data-testid={testId}
+      aria-pressed={active}
+      onClick={(e) => {
+        e.stopPropagation();
+        onClick?.(e);
+      }}
+      className={cn(
+        "inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-text-secondary transition-colors hover:bg-bg-muted hover:text-text-primary data-[state=open]:bg-bg-muted data-[state=open]:text-text-primary [&_svg]:size-4",
+        className,
+      )}
+    >
+      {children}
+    </button>
+  );
+}
+
+/**
+ * The star toggle: an outline star, or a filled one in the star colour.
+ */
+export function StarToggle({
+  starred,
+  onToggle,
+  className,
+}: {
+  starred: boolean;
+  onToggle?: () => void;
+  className?: string;
+}) {
+  return (
+    <IconAction
+      label={starred ? "Unstar" : "Star"}
+      active={starred}
+      onClick={() => onToggle?.()}
+      className={cn(starred && "text-star hover:text-star", className)}
+    >
+      <Star className={cn(starred && "fill-current")} />
+    </IconAction>
+  );
+}
+
+/**
+ * Archive / snooze / pin / star buttons in one row. Used in the hover bar of
+ * an inbox row (desktop), the thread header and the selection bar.
+ */
+export function MailActionButtons({
+  state,
+  handlers,
+  className,
+  showStar = true,
+}: {
+  state: MailStateLike;
+  handlers: MailActionHandlers;
+  className?: string;
+  showStar?: boolean;
+}) {
+  const archived = !!state.archivedAt;
+  return (
+    <div className={cn("flex items-center gap-0.5", className)}>
+      {handlers.onArchive && (
+        <IconAction
+          label={archived ? "Move to inbox" : "Archive"}
+          onClick={handlers.onArchive}
+        >
+          {archived ? <ArchiveRestore /> : <Archive />}
+        </IconAction>
+      )}
+      {handlers.onSnooze && (
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <button
+              type="button"
+              aria-label="Snooze"
+              title={
+                state.snoozedUntil
+                  ? `Snoozed until ${snoozeLabel(state.snoozedUntil)}`
+                  : "Snooze"
+              }
+              onClick={(e) => e.stopPropagation()}
+              className={cn(
+                "inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-text-secondary transition-colors hover:bg-bg-muted hover:text-text-primary data-[state=open]:bg-bg-muted [&_svg]:size-4",
+                state.snoozedUntil && "text-warning",
+              )}
+            >
+              <Clock />
+            </button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent
+            align="end"
+            className="w-60"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <SnoozeItems state={state} onSnooze={handlers.onSnooze} />
+          </DropdownMenuContent>
+        </DropdownMenu>
+      )}
+      {handlers.onTogglePin && (
+        <IconAction
+          label={state.pinned ? "Unpin" : "Pin to top"}
+          active={state.pinned}
+          onClick={handlers.onTogglePin}
+          className={cn(state.pinned && "text-accent hover:text-accent")}
+        >
+          {state.pinned ? <PinOff /> : <Pin />}
+        </IconAction>
+      )}
+      {showStar && handlers.onToggleStar && (
+        <StarToggle starred={state.starred} onToggle={handlers.onToggleStar} />
+      )}
+    </div>
+  );
+}
+
+/**
+ * The "⋯" row menu: every action in one place. Always shown on touch
+ * screens (where there is no hover bar) and for admins' delete.
+ */
+export function MailRowMenu({
+  state,
+  handlers,
+  className,
+  testId,
+  personId,
+  label = "Conversation actions",
+}: {
+  state: MailStateLike;
+  handlers: MailActionHandlers;
+  className?: string;
+  testId?: string;
+  personId?: string;
+  label?: string;
+}) {
+  const archived = !!state.archivedAt;
+  return (
+    <DropdownMenu modal={false}>
+      <DropdownMenuTrigger asChild>
+        <button
+          type="button"
+          data-testid={testId}
+          data-person-id={personId}
+          aria-label={label}
+          onClick={(e) => e.stopPropagation()}
+          className={cn(
+            "inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-text-tertiary transition-colors hover:bg-bg-muted hover:text-text-primary data-[state=open]:bg-bg-muted data-[state=open]:text-text-primary",
+            className,
+          )}
+        >
+          <MoreHorizontal size={16} />
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent
+        align="end"
+        className="w-56"
+        onClick={(e) => e.stopPropagation()}
+      >
+        {handlers.onToggleStar && (
+          <DropdownMenuItem onSelect={handlers.onToggleStar}>
+            <Star className={cn(state.starred && "fill-current text-star")} />
+            {state.starred ? "Unstar" : "Star"}
+          </DropdownMenuItem>
+        )}
+        {handlers.onTogglePin && (
+          <DropdownMenuItem onSelect={handlers.onTogglePin}>
+            {state.pinned ? <PinOff /> : <Pin />}
+            {state.pinned ? "Unpin" : "Pin to top"}
+          </DropdownMenuItem>
+        )}
+        {handlers.onArchive && (
+          <DropdownMenuItem onSelect={handlers.onArchive}>
+            {archived ? <ArchiveRestore /> : <Archive />}
+            {archived ? "Move to inbox" : "Archive"}
+          </DropdownMenuItem>
+        )}
+        {handlers.onSnooze && (
+          <DropdownMenuSub>
+            <DropdownMenuSubTrigger>
+              <Clock className="text-text-secondary" />
+              {state.snoozedUntil ? "Snoozed" : "Snooze"}
+            </DropdownMenuSubTrigger>
+            <DropdownMenuSubContent className="w-60">
+              <SnoozeItems state={state} onSnooze={handlers.onSnooze} />
+            </DropdownMenuSubContent>
+          </DropdownMenuSub>
+        )}
+        {handlers.onMarkRead && (
+          <DropdownMenuItem onSelect={handlers.onMarkRead}>
+            <CheckCheck /> Mark as read
+          </DropdownMenuItem>
+        )}
+        {handlers.onDelete && (
+          <>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem
+              data-testid="person-delete-button"
+              onSelect={handlers.onDelete}
+              className="text-destructive focus:bg-destructive-subtle focus:text-destructive [&>svg]:text-destructive"
+            >
+              <Trash2 /> Delete person
+            </DropdownMenuItem>
+          </>
+        )}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}

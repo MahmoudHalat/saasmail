@@ -6,6 +6,8 @@ import {
   disablePush,
 } from "@/lib/push";
 import PageHeader, { PageContainer } from "@/components/PageHeader";
+import AppearanceSettings from "@/components/AppearanceSettings";
+import { useLocation } from "react-router-dom";
 import {
   HIDE_SIGNATURES_EVENT,
   HIDE_SIGNATURES_STORAGE_KEY,
@@ -25,6 +27,14 @@ interface Subscription {
 export default function SettingsPage() {
   const { data: session } = useSession();
   const isAdmin = session?.user?.role === "admin";
+  const { hash } = useLocation();
+
+  // Deep links such as /settings#appearance scroll to their section.
+  useEffect(() => {
+    if (!hash) return;
+    const el = document.getElementById(hash.slice(1));
+    if (el) requestAnimationFrame(() => el.scrollIntoView({ block: "start" }));
+  }, [hash]);
 
   return (
     <PageContainer>
@@ -34,6 +44,7 @@ export default function SettingsPage() {
       />
 
       <div className="max-w-3xl space-y-8">
+        <AppearanceSettings />
         <NotificationsSection />
         <DisplayPreferencesSection />
         {isAdmin && <AppBrandingSection />}
@@ -124,20 +135,20 @@ function NotificationsSection() {
         </p>
       ) : (
         <div className="space-y-5">
-          <div className="rounded-[8px] bg-card p-5 ring-1 ring-border">
+          <div className="rounded-2xl bg-card p-5 border border-border shadow-card">
             <h3 className="text-sm font-semibold text-text-primary">
               This browser
             </h3>
-            <p className="mt-1 text-xs font-light text-text-secondary">
+            <p className="mt-1 text-xs text-text-secondary">
               {subscribedHere
                 ? "Push is on for this browser."
                 : "Push is off for this browser."}
             </p>
-            {error && <p className="mt-2 text-xs text-red-600">{error}</p>}
+            {error && <p className="mt-2 text-xs text-destructive">{error}</p>}
             <div className="mt-3">
               {subscribedHere ? (
                 <button
-                  className="rounded-[6px] border border-border px-3 py-1.5 text-xs font-medium text-text-secondary hover:bg-bg-muted hover:text-text-primary"
+                  className="rounded-lg border border-border px-3 py-1.5 text-xs font-medium text-text-secondary hover:bg-bg-muted hover:text-text-primary"
                   disabled={busy || !vapidPublicKey}
                   onClick={onDisable}
                 >
@@ -145,7 +156,7 @@ function NotificationsSection() {
                 </button>
               ) : (
                 <button
-                  className="rounded-[6px] bg-text-primary px-3 py-1.5 text-xs font-medium text-white hover:bg-text-primary/90"
+                  className="inline-flex items-center justify-center gap-1.5 rounded-lg bg-accent font-medium text-accent-foreground hover:bg-accent-hover h-8 px-3 text-[13px]"
                   disabled={busy || !vapidPublicKey}
                   onClick={onEnable}
                 >
@@ -155,18 +166,16 @@ function NotificationsSection() {
             </div>
           </div>
 
-          <div className="overflow-hidden rounded-[8px] bg-card ring-1 ring-border">
+          <div className="overflow-hidden rounded-2xl bg-card border border-border shadow-card">
             <div className="border-b border-border px-5 py-3">
-              <h3 className="text-xs font-semibold uppercase tracking-wider text-text-tertiary">
+              <h3 className="font-label text-text-tertiary">
                 All subscribed browsers
               </h3>
             </div>
             {subs.length === 0 ? (
-              <p className="px-5 py-4 text-xs font-light text-text-tertiary">
-                None yet.
-              </p>
+              <p className="px-5 py-4 text-xs text-text-tertiary">None yet.</p>
             ) : (
-              <ul className="divide-y divide-border/60 text-xs">
+              <ul className="divide-y divide-border-subtle text-xs">
                 {subs.map((s) => (
                   <li
                     key={s.id}
@@ -176,7 +185,7 @@ function NotificationsSection() {
                       <div className="truncate text-sm font-medium text-text-primary">
                         {s.userAgent ?? "Unknown browser"}
                       </div>
-                      <div className="text-xs font-light text-text-tertiary">
+                      <div className="text-xs text-text-tertiary">
                         added {new Date(s.createdAt * 1000).toLocaleString()}
                         {s.lastUsedAt
                           ? ` · last used ${new Date(s.lastUsedAt * 1000).toLocaleString()}`
@@ -184,7 +193,7 @@ function NotificationsSection() {
                       </div>
                     </div>
                     <button
-                      className="rounded-[6px] border border-border px-2 py-1 text-xs font-medium text-text-secondary hover:bg-bg-muted hover:text-text-primary"
+                      className="rounded-lg border border-border px-2 py-1 text-xs font-medium text-text-secondary hover:bg-bg-muted hover:text-text-primary"
                       disabled={busy}
                       onClick={() => onRevoke(s.id)}
                     >
@@ -239,13 +248,13 @@ function DisplayPreferencesSection() {
         Display preferences
       </h2>
 
-      <div className="rounded-[8px] bg-card p-5 ring-1 ring-border">
+      <div className="rounded-2xl bg-card p-5 border border-border shadow-card">
         <div className="flex items-start justify-between gap-4">
           <div className="min-w-0">
             <h3 className="text-sm font-medium text-text-primary">
               Hide signatures in chat
             </h3>
-            <p className="mt-1 text-xs font-light text-text-secondary">
+            <p className="mt-1 text-xs text-text-secondary">
               Strip the signature block from chat-mode bubbles to keep the feed
               clean.
             </p>
@@ -261,7 +270,7 @@ function DisplayPreferencesSection() {
             }`}
           >
             <span
-              className={`h-4 w-4 rounded-full bg-white shadow transition-transform ${
+              className={`h-4 w-4 rounded-full bg-card shadow-card transition-transform ${
                 hideSignatures ? "translate-x-4" : "translate-x-0"
               }`}
             />
@@ -340,15 +349,15 @@ function AppBrandingSection() {
         App branding
       </h2>
 
-      <div className="rounded-[8px] bg-card p-5 ring-1 ring-border">
-        <p className="text-xs font-light text-text-secondary">
+      <div className="rounded-2xl bg-card p-5 border border-border shadow-card">
+        <p className="text-xs text-text-secondary">
           The app name appears in the top-nav wordmark, the login screen, and
           invitation emails. Defaults to <code>saasmail</code>.
         </p>
         <div className="mt-4 space-y-2">
           <label
             htmlFor="branding-app-name"
-            className="text-xs font-medium uppercase tracking-wider text-text-tertiary"
+            className="font-label text-text-tertiary"
           >
             App name
           </label>
@@ -359,18 +368,18 @@ function AppBrandingSection() {
             onChange={(e) => setValue(e.target.value)}
             maxLength={40}
             disabled={busy}
-            className="h-10 w-full max-w-sm rounded-[6px] border border-border bg-bg-subtle px-3 text-sm text-text-primary focus:outline-none focus:ring-2 focus:ring-text-primary/30"
+            className="h-10 w-full max-w-sm rounded-lg border border-border bg-bg-subtle px-3 text-sm text-text-primary focus:outline-none focus:ring-2 focus:ring-text-primary/30"
           />
         </div>
 
         {error && (
-          <p className="mt-3 text-xs text-red-600" role="alert">
+          <p className="mt-3 text-xs text-destructive" role="alert">
             {error}
           </p>
         )}
         {success && (
           <p
-            className="mt-3 text-xs text-emerald-600"
+            className="mt-3 text-xs text-success"
             data-testid="branding-success"
           >
             {success}
@@ -382,7 +391,7 @@ function AppBrandingSection() {
             type="button"
             onClick={onSave}
             disabled={busy}
-            className="rounded-[6px] bg-text-primary px-3 py-1.5 text-xs font-medium text-white hover:bg-text-primary/90 disabled:cursor-not-allowed disabled:opacity-60"
+            className="inline-flex items-center justify-center gap-1.5 rounded-lg bg-accent font-medium text-accent-foreground hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-60 h-8 px-3 text-[13px]"
           >
             {busy ? "Saving…" : "Save"}
           </button>
@@ -390,7 +399,7 @@ function AppBrandingSection() {
             type="button"
             onClick={onReset}
             disabled={busy}
-            className="text-xs font-light text-text-secondary hover:text-text-primary hover:underline disabled:cursor-not-allowed disabled:opacity-60"
+            className="text-xs text-text-secondary hover:text-text-primary hover:underline disabled:cursor-not-allowed disabled:opacity-60"
           >
             Reset to default
           </button>

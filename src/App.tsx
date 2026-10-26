@@ -65,8 +65,12 @@ function AuthGuard() {
     (session && !brandingLoaded)
   ) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-bg">
-        <p className="text-text-secondary">Loading...</p>
+      <div
+        className="pt-auth items-center justify-center"
+        aria-busy="true"
+        aria-label="Loading"
+      >
+        <span className="h-5 w-5 animate-spin rounded-full border-2 border-chrome-line border-t-chrome-accent" />
       </div>
     );
   }

@@ -1,36 +1,12 @@
-import { Paperclip, Users } from "lucide-react";
+import { Clock, Paperclip, Pin, Star, Users } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { GroupedConversation } from "@/lib/api";
-
-// Solid palette for stacked group avatars — opaque equivalents of
-// PersonList's soft transparent palette (the rgba(_, 0.12-0.16) values
-// composited over a white card). Visually identical to the regular
-// person avatars when viewed solo; doesn't bleed into neighbors when
-// stacked because there's no transparency. Foreground colors mirror
-// PersonList's `fg` so the same person hashes to the same hue.
-const AVATAR_PALETTE = [
-  { bg: "#efebff", fg: "#5b3ce6" }, // violet
-  { bg: "#e4f8ec", fg: "#15803d" }, // green
-  { bg: "#fdebf5", fg: "#be185d" }, // pink
-  { bg: "#fef0e4", fg: "#c2410c" }, // orange
-  { bg: "#e3f6fe", fg: "#0369a1" }, // blue
-  { bg: "#f3e7fe", fg: "#7e22ce" }, // purple
-  { bg: "#def5f3", fg: "#0f766e" }, // teal
-  { bg: "#fcf3d7", fg: "#a16207" }, // amber
-];
-
-function avatarColor(seed: string) {
-  let h = 0;
-  for (let i = 0; i < seed.length; i++) h = (h * 31 + seed.charCodeAt(i)) >>> 0;
-  return AVATAR_PALETTE[h % AVATAR_PALETTE.length];
-}
-
-function initials(name: string | null, email: string) {
-  const source = name || email.split("@")[0];
-  const parts = source.split(/[\s.\-_]+/).filter(Boolean);
-  const letters = (parts[0]?.[0] ?? "") + (parts[1]?.[0] ?? "");
-  return letters.toUpperCase() || "?";
-}
+import { avatarColor, initials } from "@/lib/avatar";
+import {
+  MailActionButtons,
+  MailRowMenu,
+  type MailActionHandlers,
+} from "@/components/MailActions";
 
 function formatTime(ts: number) {
   const date = new Date(ts * 1000);
@@ -65,6 +41,8 @@ interface GroupRowProps {
   isSelected: boolean;
   onSelect: () => void;
   onMarkRead?: (id: string) => void;
+  /** Star / pin / archive / snooze handlers (InboxPage). */
+  actions?: MailActionHandlers;
 }
 
 /**
@@ -84,6 +62,7 @@ export default function GroupRow({
    * stack + unread badge. Hides the name list and meta.
    */
   compact = false,
+  actions,
 }: GroupRowProps & { compact?: boolean }) {
   const display = groupLabel(group.participants);
   // Show up to 3 avatars in a horizontal stack (each shifted left of the
@@ -92,25 +71,31 @@ export default function GroupRow({
   const MAX_AVATARS = 3;
   const visible = group.participants.slice(0, MAX_AVATARS);
   const overflow = Math.max(0, group.participants.length - visible.length);
-  const AVATAR_SIZE = 28; // h-7 / w-7
-  const OVERLAP = 10; // each subsequent avatar starts 10px left → 18px showing
+  const AVATAR_SIZE = 32; // h-8 / w-8
+  const OVERLAP = 12; // each subsequent avatar starts 10px left → 18px showing
   // Total width of the stack: first avatar full + (n-1) showing OVERLAP each.
   const stackWidth =
     AVATAR_SIZE +
     Math.max(0, visible.length + (overflow > 0 ? 1 : 0) - 1) *
       (AVATAR_SIZE - OVERLAP);
 
+  const unread = group.unreadCount > 0;
+  const handlers: MailActionHandlers = {
+    ...(actions ?? {}),
+    ...(unread && onMarkRead ? { onMarkRead: () => onMarkRead(group.id) } : {}),
+  };
+  const hasMenu = !compact && !!actions;
+
   return (
     <li
       className={cn(
-        "group relative transition-colors",
-        isSelected ? "bg-text-primary/[0.04]" : "hover:bg-text-primary/[0.025]",
+        "group relative border-b border-border-subtle transition-colors",
+        isSelected ? "bg-accent-subtle/70" : "hover:bg-bg-subtle",
       )}
     >
       {isSelected && (
         <span
-          className="absolute inset-y-2 left-0 w-0.5 rounded-full"
-          style={{ backgroundColor: "#7c5cfc" }}
+          className="absolute inset-y-0 left-0 w-[3px] bg-accent"
           aria-hidden
         />
       )}
@@ -120,13 +105,13 @@ export default function GroupRow({
         data-conversation-id={group.id}
         onClick={onSelect}
         className={cn(
-          "flex w-full items-center gap-2.5 px-3 py-2.5 text-left active:bg-text-primary/[0.04] sm:py-2",
-          compact && "justify-center px-2",
+          "flex w-full items-start gap-3 py-[calc(var(--sm-row-pad)+2px)] pl-4 pr-3 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40",
+          compact && "items-center justify-center px-2",
         )}
       >
-        {/* Horizontally stacked avatars — clean single-row group chip. */}
+        {/* Horizontally stacked avatars. */}
         <span
-          className="relative shrink-0 self-center"
+          className="relative mt-0.5 shrink-0"
           style={{ width: stackWidth, height: AVATAR_SIZE }}
         >
           {visible.map((p, i) => {
@@ -135,7 +120,7 @@ export default function GroupRow({
               <span
                 key={p.id}
                 title={p.name || p.email}
-                className="absolute flex h-7 w-7 items-center justify-center rounded-full text-[10px] font-semibold tracking-tight"
+                className="absolute flex h-8 w-8 items-center justify-center rounded-full text-[11px] font-semibold ring-2 ring-card"
                 style={{
                   backgroundColor: color.bg,
                   color: color.fg,
@@ -150,7 +135,7 @@ export default function GroupRow({
           })}
           {overflow > 0 && (
             <span
-              className="absolute flex h-7 w-7 items-center justify-center rounded-full bg-bg-muted text-[10px] font-semibold text-text-secondary"
+              className="absolute flex h-8 w-8 items-center justify-center rounded-full bg-bg-muted text-[11px] font-semibold text-text-secondary ring-2 ring-card"
               style={{
                 left: visible.length * (AVATAR_SIZE - OVERLAP),
                 top: 0,
@@ -165,44 +150,84 @@ export default function GroupRow({
 
         {!compact && (
           <div className="min-w-0 flex-1">
-            <div className="flex items-baseline justify-between gap-3">
+            <div className="flex items-baseline gap-2">
               <span
                 className={cn(
-                  "flex min-w-0 items-center gap-1.5 truncate text-sm",
-                  group.unreadCount > 0
-                    ? "font-semibold text-text-primary"
-                    : "font-medium text-text-primary",
+                  "flex min-w-0 flex-1 items-center gap-1.5 truncate text-sm text-text-primary",
+                  unread ? "font-semibold" : "font-medium",
                 )}
               >
-                <Users size={11} className="shrink-0 text-text-tertiary" />
+                <Users size={13} className="shrink-0 text-text-tertiary" />
                 <span className="truncate">{display}</span>
               </span>
-              <span className="shrink-0 text-[11px] font-light text-text-tertiary">
-                {formatTime(group.lastEmailAt)}
+              <span
+                className={cn(
+                  "flex shrink-0 items-center gap-1.5 text-xs transition-opacity",
+                  unread
+                    ? "font-medium text-text-primary"
+                    : "text-text-tertiary",
+                  hasMenu &&
+                    "[@media(hover:hover)]:group-hover:opacity-0 [@media(hover:none)]:mr-7",
+                )}
+              >
+                {group.pinned && (
+                  <Pin size={12} className="text-accent" aria-label="Pinned" />
+                )}
+                {group.snoozedUntil && (
+                  <Clock
+                    size={12}
+                    className="text-warning"
+                    aria-label="Snoozed"
+                  />
+                )}
+                {group.starred && (
+                  <Star
+                    size={13}
+                    className="fill-current text-star"
+                    aria-label="Starred"
+                  />
+                )}
+                <span className="tabular">{formatTime(group.lastEmailAt)}</span>
               </span>
             </div>
 
-            <div className="mt-0.5 flex items-center justify-between gap-2">
-              <div className="flex items-center gap-1.5 text-[11px] text-text-tertiary">
+            {(group.latestSubject || group.snippet) && (
+              <p className="mt-0.5 truncate text-[13px] text-text-secondary">
+                {group.latestSubject && (
+                  <span
+                    className={cn("text-text-primary", unread && "font-medium")}
+                  >
+                    {group.latestSubject}
+                  </span>
+                )}
+                {group.latestSubject && group.snippet && (
+                  <span className="text-text-tertiary"> — </span>
+                )}
+                {group.snippet}
+              </p>
+            )}
+
+            <div className="mt-1 flex items-center justify-between gap-2">
+              <div className="flex min-w-0 items-center gap-1.5 text-xs text-text-tertiary">
                 <span className="truncate">{group.inbox.split("@")[0]}</span>
-                <span className="text-text-tertiary/40">·</span>
-                <span>
+                <span aria-hidden>·</span>
+                <span className="tabular">
                   {group.totalCount} message{group.totalCount !== 1 ? "s" : ""}
                 </span>
                 {group.hasAttachment === 1 && (
                   <Paperclip
-                    size={10}
+                    size={11}
                     className="text-text-tertiary"
                     aria-label="Has attachment"
                   />
                 )}
               </div>
 
-              {group.unreadCount > 0 && (
+              {unread && (
                 <span
                   role="button"
                   tabIndex={0}
-                  title="Tap to mark all as read"
+                  title="Mark all as read"
                   onClick={(e) => {
                     e.stopPropagation();
                     onMarkRead?.(group.id);
@@ -214,8 +239,7 @@ export default function GroupRow({
                       onMarkRead?.(group.id);
                     }
                   }}
-                  className="flex h-5 min-w-5 cursor-pointer items-center justify-center rounded-full px-1.5 text-[10px] font-bold text-white"
-                  style={{ backgroundColor: "#7c5cfc" }}
+                  className="tabular flex h-5 min-w-5 cursor-pointer items-center justify-center rounded-full bg-accent px-1.5 text-[11px] font-semibold text-accent-foreground"
                 >
                   {group.unreadCount}
                 </span>
@@ -225,15 +249,26 @@ export default function GroupRow({
         )}
 
         {/* Compact mode: just the unread badge, anchored to the avatar stack. */}
-        {compact && group.unreadCount > 0 && (
-          <span
-            className="absolute right-1 top-1 flex h-4 min-w-4 items-center justify-center rounded-full px-1 text-[9px] font-bold text-white"
-            style={{ backgroundColor: "#7c5cfc" }}
-          >
+        {compact && unread && (
+          <span className="absolute right-1 top-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-accent px-1 text-[9.5px] font-semibold text-accent-foreground">
             {group.unreadCount}
           </span>
         )}
       </button>
+
+      {hasMenu && (
+        <div className="absolute right-2 top-1.5 flex items-center gap-0.5">
+          <div className="hidden rounded-lg bg-card/95 shadow-card ring-1 ring-border [@media(hover:hover)]:group-hover:flex [@media(hover:hover)]:group-has-[:focus-visible]:flex">
+            <MailActionButtons state={group} handlers={handlers} />
+            <MailRowMenu state={group} handlers={handlers} />
+          </div>
+          <MailRowMenu
+            state={group}
+            handlers={handlers}
+            className="-mr-1 -mt-0.5 h-7 w-7 [@media(hover:hover)]:hidden"
+          />
+        </div>
+      )}
     </li>
   );
 }

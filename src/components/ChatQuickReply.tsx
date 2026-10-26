@@ -182,7 +182,10 @@ export default function ChatQuickReply({
   }
 
   return (
-    <div className="border-t border-border bg-card px-4 py-3 sm:px-6">
+    <div
+      className="border-t border-border bg-card px-3 pt-3 sm:px-5"
+      style={{ paddingBottom: "max(0.75rem, env(safe-area-inset-bottom))" }}
+    >
       {files.length > 0 && (
         <div className="mb-2">
           <AttachmentChips
@@ -194,7 +197,7 @@ export default function ChatQuickReply({
           />
         </div>
       )}
-      <div className="flex items-end gap-2 rounded-[10px] bg-bg-subtle/60 p-2 ring-1 ring-border focus-within:ring-2 focus-within:ring-text-primary/15">
+      <div className="flex items-end gap-1 rounded-xl border border-border-strong bg-card p-1.5 shadow-card transition-[border-color,box-shadow] focus-within:border-accent focus-within:ring-3 focus-within:ring-accent/15">
         <textarea
           ref={ref}
           value={text}
@@ -215,7 +218,7 @@ export default function ChatQuickReply({
             onClick={onOpenCompose}
             title="Open in full compose (change sender, add CC, attachments…)"
             aria-label="Open in full compose"
-            className="shrink-0 rounded-[8px] p-2 text-text-tertiary transition-colors hover:bg-bg-muted hover:text-text-primary"
+            className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-text-secondary transition-colors hover:bg-bg-muted hover:text-text-primary"
           >
             <Maximize2 size={14} />
           </button>
@@ -224,7 +227,7 @@ export default function ChatQuickReply({
           type="button"
           onClick={handleSend}
           disabled={!canSend}
-          className="shrink-0 rounded-[8px] bg-text-primary px-3.5 py-2 text-xs font-medium text-white shadow-sm transition-colors hover:bg-text-primary/90 disabled:cursor-not-allowed disabled:opacity-40"
+          className="inline-flex h-8 shrink-0 items-center rounded-lg bg-accent px-3.5 text-[13px] font-medium text-accent-foreground shadow-card transition-colors hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-40"
         >
           {sending ? "Sending…" : "Send"}
         </button>
@@ -233,7 +236,7 @@ export default function ChatQuickReply({
         {error ? (
           <span className="text-xs text-destructive">{error}</span>
         ) : (
-          <span className="text-[11px] font-light text-text-tertiary">
+          <span className="text-xs text-text-tertiary">
             Sending from <span className="font-medium">{inboxAddress}</span> ·
             ⌘/Ctrl + Enter to send
             {onOpenCompose && (
