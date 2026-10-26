@@ -17,7 +17,10 @@ test.describe.serial("global search", () => {
 
     const input = page.getByTestId(TEST_IDS.personSearchInput);
     await expect(input).toBeVisible();
-    await expect(input).toHaveAttribute("placeholder", "Search...");
+    await expect(input).toHaveAttribute(
+      "placeholder",
+      "Search people and mail",
+    );
   });
 
   test("clear button is hidden when search is empty", async ({ page }) => {

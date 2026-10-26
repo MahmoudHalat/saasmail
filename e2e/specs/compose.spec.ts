@@ -184,7 +184,8 @@ test.describe.serial("compose & send", () => {
     await expect(sendButton).toBeEnabled();
 
     // Clear the text (select all, delete)
-    await page.keyboard.press("Control+a");
+    // ControlOrMeta: on macOS, Control+A moves to line start in ProseMirror.
+    await page.keyboard.press("ControlOrMeta+a");
     await page.keyboard.press("Backspace");
 
     // Send button should be disabled again

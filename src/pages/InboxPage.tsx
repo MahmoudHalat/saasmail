@@ -978,7 +978,9 @@ export default function InboxPage() {
                 onRefresh={refreshPeople}
                 compact={isCompact}
                 mailActions={mailActionsFor}
-                emptyMessage={FOLDER_EMPTY[mailView]}
+                emptyMessage={
+                  search.trim() ? "No people found" : FOLDER_EMPTY[mailView]
+                }
               />
               {/* Drag handle */}
               <div
