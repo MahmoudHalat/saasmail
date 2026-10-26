@@ -28,6 +28,7 @@ const MailStateSchema = z.object({
   pinned: z.boolean(),
   archivedAt: z.number().nullable(),
   snoozedUntil: z.number().nullable(),
+  trashedAt: z.number().nullable(),
 });
 
 const updateRoute = createRoute({
@@ -46,6 +47,10 @@ const updateRoute = createRoute({
             pinned: z.boolean().optional(),
             archived: z.boolean().optional(),
             snoozedUntil: z.number().int().nullable().optional(),
+            trashed: z.boolean().optional().openapi({
+              description:
+                "Move to (or out of) the caller's Trash. Trash is per user and hides the row everywhere else; new mail brings it back. Permanent deletion is DELETE /api/people/{id}.",
+            }),
           }),
         },
       },
@@ -76,6 +81,9 @@ mailStateRouter.openapi(updateRoute, async (c) => {
     if (body.archived && body.snoozedUntil === undefined)
       set.snoozedUntil = null;
   }
+  if (body.trashed !== undefined) {
+    set.trashedAt = body.trashed ? now : null;
+  }
   if (body.snoozedUntil !== undefined) {
     set.snoozedUntil = body.snoozedUntil;
     // Snoozing takes the row out of the archive.
@@ -104,6 +112,7 @@ mailStateRouter.openapi(updateRoute, async (c) => {
           pinned: 0,
           archivedAt: null,
           snoozedUntil: null,
+          trashedAt: null,
           ...set,
           updatedAt: now,
         })
@@ -136,6 +145,7 @@ mailStateRouter.openapi(updateRoute, async (c) => {
         pinned: r.pinned === 1,
         archivedAt: r.archivedAt,
         snoozedUntil: r.snoozedUntil,
+        trashedAt: r.trashedAt,
       })),
     },
     200,

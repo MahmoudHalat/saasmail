@@ -23,5 +23,13 @@ export const userPreferences = sqliteTable("user_preferences", {
   density: text("density"),
   /** Default layout colour theme: navy, ink, slate, indigo, forest, claret, paper. */
   palette: text("palette"),
+  /**
+   * JSON object of per-layout view settings (reading pane, swipe actions,
+   * favorites, tabs on/off, undo-send delay …), keyed by layout. Opaque to
+   * the server apart from a size cap.
+   */
+  layoutSettings: text("layout_settings"),
+  /** JSON {category: unix seconds} — when each inbox tab was last viewed. */
+  tabSeen: text("tab_seen"),
   updatedAt: integer("updated_at").notNull(),
 });

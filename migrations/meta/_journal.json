@@ -351,6 +351,13 @@
       "when": 1793048428762,
       "tag": "0049_user_prefs_palette",
       "breakpoints": true
+    },
+    {
+      "idx": 50,
+      "version": "6",
+      "when": 1793058112612,
+      "tag": "0050_trash_overrides_layout_settings",
+      "breakpoints": true
     }
   ]
 }

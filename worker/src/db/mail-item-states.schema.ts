@@ -34,10 +34,29 @@ export const mailItemStates = sqliteTable(
     pinned: integer("pinned").notNull().default(0),
     archivedAt: integer("archived_at"),
     snoozedUntil: integer("snoozed_until"),
+    /** Moved to this user's Trash; like archive, new mail brings it back. */
+    trashedAt: integer("trashed_at"),
     updatedAt: integer("updated_at").notNull(),
   },
   (table) => [
     primaryKey({ columns: [table.userId, table.itemType, table.itemId] }),
     index("mail_item_states_user_idx").on(table.userId),
   ],
+);
+
+/**
+ * Per-user correction of the Gmail-style category guess for a sender
+ * ("Move to Primary" in Gmail). Keyed by lowercase sender address.
+ */
+export const categoryOverrides = sqliteTable(
+  "category_overrides",
+  {
+    userId: text("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    senderEmail: text("sender_email").notNull(),
+    category: text("category").notNull(),
+    updatedAt: integer("updated_at").notNull(),
+  },
+  (table) => [primaryKey({ columns: [table.userId, table.senderEmail] })],
 );

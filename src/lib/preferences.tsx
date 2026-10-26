@@ -4,6 +4,7 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type ReactNode,
 } from "react";
@@ -61,6 +62,8 @@ const DEFAULTS: UserPreferences = {
   colorMode: "system",
   density: "comfortable",
   palette: "navy",
+  layoutSettings: {},
+  tabSeen: {},
 };
 
 export const PALETTES: Palette[] = [
@@ -77,6 +80,10 @@ const UI_THEMES: UiTheme[] = ["default", "gmail", "outlook"];
 const COLOR_MODES: ColorMode[] = ["light", "dark", "system"];
 const DENSITIES: Density[] = ["comfortable", "compact"];
 
+function isPlainObject(v: unknown): v is Record<string, unknown> {
+  return !!v && typeof v === "object" && !Array.isArray(v);
+}
+
 function sanitize(raw: unknown): UserPreferences {
   const r = (raw ?? {}) as Partial<Record<keyof UserPreferences, unknown>>;
   return {
@@ -92,6 +99,12 @@ function sanitize(raw: unknown): UserPreferences {
     palette: PALETTES.includes(r.palette as Palette)
       ? (r.palette as Palette)
       : DEFAULTS.palette,
+    layoutSettings: isPlainObject(r.layoutSettings)
+      ? (r.layoutSettings as UserPreferences["layoutSettings"])
+      : {},
+    tabSeen: isPlainObject(r.tabSeen)
+      ? (r.tabSeen as UserPreferences["tabSeen"])
+      : {},
   };
 }
 
@@ -234,7 +247,16 @@ export function PreferencesProvider({ children }: { children: ReactNode }) {
       // Optimistic: the theme switches at once, the server catches up.
       let next: UserPreferences = DEFAULTS;
       setPrefs((prev) => {
-        next = sanitize({ ...prev, ...patch });
+        next = sanitize({
+          ...prev,
+          ...patch,
+          // Same merge as the server: by layout / by tab.
+          layoutSettings: {
+            ...prev.layoutSettings,
+            ...(patch.layoutSettings ?? {}),
+          },
+          tabSeen: { ...prev.tabSeen, ...(patch.tabSeen ?? {}) },
+        });
         writeStored(next);
         return next;
       });
@@ -287,4 +309,52 @@ export function usePreferences(): PreferencesContextValue {
 
 export function useUiTheme(): UiTheme {
   return usePreferences().uiTheme;
+}
+
+/**
+ * One layout's view settings (reading pane, swipe actions, favorites …),
+ * saved to the account so they follow the user across devices. On first
+ * use, values still in this browser's localStorage under `legacyKey` are
+ * moved into the account.
+ */
+export function useLayoutSettings<T extends Record<string, unknown>>(
+  layout: string,
+  defaults: T,
+  legacyKey?: string,
+): [T, (patch: Partial<T>) => void] {
+  const { layoutSettings, setPreferences, loaded } = usePreferences();
+  const saved = (layoutSettings[layout] ?? null) as Partial<T> | null;
+  const value = useMemo(
+    () => ({ ...defaults, ...(saved ?? {}) }) as T,
+    [
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+      JSON.stringify(saved),
+    ],
+  );
+  const migrated = useRef(false);
+  useEffect(() => {
+    if (!loaded || migrated.current || saved || !legacyKey) return;
+    migrated.current = true;
+    try {
+      const raw = window.localStorage.getItem(legacyKey);
+      if (!raw) return;
+      const legacy = JSON.parse(raw);
+      if (isPlainObject(legacy)) {
+        void setPreferences({
+          layoutSettings: { [layout]: { ...defaults, ...legacy } },
+        });
+      }
+    } catch {
+      /* ignore unreadable legacy values */
+    }
+  }, [loaded, saved, legacyKey, layout, defaults, setPreferences]);
+  const update = useCallback(
+    (patch: Partial<T>) => {
+      void setPreferences({
+        layoutSettings: { [layout]: { ...value, ...patch } },
+      });
+    },
+    [layout, value, setPreferences],
+  );
+  return [value, update];
 }

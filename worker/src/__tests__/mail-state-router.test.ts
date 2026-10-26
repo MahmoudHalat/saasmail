@@ -186,6 +186,8 @@ describe("user preferences", () => {
       colorMode: "system",
       density: "comfortable",
       palette: "navy",
+      layoutSettings: {},
+      tabSeen: {},
     });
 
     res = await authFetch("/api/user/preferences", {
@@ -206,6 +208,8 @@ describe("user preferences", () => {
       colorMode: "dark",
       density: "comfortable",
       palette: "navy",
+      layoutSettings: {},
+      tabSeen: {},
     });
   });
 
@@ -315,5 +319,123 @@ describe("categorize", () => {
         "support@us.com",
       ]),
     ).toBe("primary");
+  });
+});
+
+describe("trash, whole-folder ids, overrides, tab counts, settings", () => {
+  let apiKey: string;
+
+  beforeAll(async () => {
+    await applyMigrations();
+  });
+
+  beforeEach(async () => {
+    await cleanDb();
+    ({ apiKey } = await createTestUser());
+    await createTestPerson({ id: "p-a", email: "a@acme.test", name: "A" });
+    await createTestPerson({ id: "p-b", email: "b@acme.test", name: "B" });
+    await createTestEmail({
+      id: "e-a",
+      personId: "p-a",
+      messageId: "a@m",
+      subject: "Invoice overdue",
+    });
+    await createTestEmail({
+      id: "e-b",
+      personId: "p-b",
+      messageId: "b@m",
+      subject: "Hello",
+      isRead: 1,
+    });
+  });
+
+  const get = async (qs: string) => {
+    const res = await authFetch(`/api/people/grouped?${qs}`, { apiKey });
+    expect(res.status).toBe(200);
+    return res.json();
+  };
+
+  it("trash hides a row everywhere but Trash, and untrash restores it", async () => {
+    await patchState(apiKey, {
+      items: [{ type: "person", id: "p-a" }],
+      trashed: true,
+    });
+    expect((await get("folder=inbox")).data.map((r: any) => r.id)).toEqual([
+      "p-b",
+    ]);
+    expect((await get("folder=trash")).data.map((r: any) => r.id)).toEqual([
+      "p-a",
+    ]);
+    await patchState(apiKey, {
+      items: [{ type: "person", id: "p-a" }],
+      trashed: false,
+    });
+    expect((await get("folder=inbox")).data).toHaveLength(2);
+  });
+
+  it("filters by subject, starred, and date window on the server", async () => {
+    expect((await get("subject=invoice")).data.map((r: any) => r.id)).toEqual([
+      "p-a",
+    ]);
+    await patchState(apiKey, {
+      items: [{ type: "person", id: "p-b" }],
+      starred: true,
+    });
+    expect((await get("starred=1")).data.map((r: any) => r.id)).toEqual([
+      "p-b",
+    ]);
+    const future = Math.floor(Date.now() / 1000) + 3600;
+    expect((await get(`after=${future}`)).data).toHaveLength(0);
+    expect((await get(`before=${future}`)).data).toHaveLength(2);
+  });
+
+  it("lists every matching id for whole-folder actions", async () => {
+    const res = await authFetch("/api/people/grouped/ids?unread=1", {
+      apiKey,
+    });
+    const body = await res.json();
+    expect(body.data).toEqual([{ type: "person", id: "p-a", unread: true }]);
+    expect(body.truncated).toBe(false);
+  });
+
+  it("applies the caller's category corrections", async () => {
+    const res = await authFetch("/api/people/category", {
+      apiKey,
+      method: "PUT",
+      body: JSON.stringify({ senders: ["A@acme.test"], category: "updates" }),
+    });
+    expect(res.status).toBe(200);
+    const rows = (await get("category=updates")).data;
+    expect(rows.map((r: any) => r.id)).toEqual(["p-a"]);
+  });
+
+  it("counts unread and new-since-viewed per tab", async () => {
+    let body = await get("folder=inbox&withTabCounts=1");
+    expect(body.tabCounts.primary).toEqual({ unread: 1, new: 1 });
+    await authFetch("/api/user/preferences", {
+      apiKey,
+      method: "PATCH",
+      body: JSON.stringify({
+        tabSeen: { primary: Math.floor(Date.now() / 1000) + 60 },
+      }),
+    });
+    body = await get("folder=inbox&withTabCounts=1");
+    expect(body.tabCounts.primary).toEqual({ unread: 1, new: 0 });
+  });
+
+  it("merges layout settings by layout", async () => {
+    const patch = (b: unknown) =>
+      authFetch("/api/user/preferences", {
+        apiKey,
+        method: "PATCH",
+        body: JSON.stringify(b),
+      });
+    await patch({ layoutSettings: { gmail: { readingPane: "right" } } });
+    const res = await patch({ layoutSettings: { outlook: { pane: "off" } } });
+    const body = await res.json();
+    expect(body.layoutSettings).toEqual({
+      gmail: { readingPane: "right" },
+      outlook: { pane: "off" },
+    });
   });
 });

@@ -1,4 +1,5 @@
 import { OpenAPIHono, createRoute, z } from "@hono/zod-openapi";
+import type { Context } from "hono";
 import { desc, like, or, eq, sql, and, inArray } from "drizzle-orm";
 import { people } from "../db/people.schema";
 import { emails } from "../db/emails.schema";
@@ -6,7 +7,11 @@ import { attachments } from "../db/attachments.schema";
 import { sentEmails } from "../db/sent-emails.schema";
 import { drafts } from "../db/drafts.schema";
 import { sequenceEnrollments } from "../db/sequence-enrollments.schema";
-import { mailItemStates } from "../db/mail-item-states.schema";
+import {
+  mailItemStates,
+  categoryOverrides,
+} from "../db/mail-item-states.schema";
+import { userPreferences } from "../db/user-preferences.schema";
 import { json200Response, escapeLike, escapeFts } from "../lib/helpers";
 import {
   getPersonScoped,
@@ -51,6 +56,7 @@ const GroupedPersonSchema = z.object({
   pinned: z.boolean(),
   archivedAt: z.number().nullable(),
   snoozedUntil: z.number().nullable(),
+  trashedAt: z.number().nullable(),
   hasSent: z.boolean(),
   latestSubject: z.string().nullable(),
   snippet: z.string().nullable(),
@@ -91,6 +97,7 @@ const GroupedConversationSchema = z.object({
   pinned: z.boolean(),
   archivedAt: z.number().nullable(),
   snoozedUntil: z.number().nullable(),
+  trashedAt: z.number().nullable(),
   hasSent: z.boolean(),
   latestSubject: z.string().nullable(),
   snippet: z.string().nullable(),
@@ -108,6 +115,7 @@ const EMPTY_ROW_STATE = {
   pinned: false,
   archivedAt: null as number | null,
   snoozedUntil: null as number | null,
+  trashedAt: null as number | null,
   hasSent: false,
   latestSubject: null as string | null,
   snippet: null as string | null,
@@ -172,6 +180,78 @@ export function categorize(
   return "primary";
 }
 
+const GroupedQuerySchema = z.object({
+  q: z.string().optional().openapi({ description: "Search person name/email" }),
+  recipient: z.string().optional().openapi({
+    description: "Filter to people who have emailed this inbox address",
+  }),
+  unread: z
+    .enum(["1", "true"])
+    .optional()
+    .openapi({ description: "Only people with unread emails" }),
+  drafts: z.enum(["1", "true"]).optional().openapi({
+    description: "Only conversations where the current user has a reply draft",
+  }),
+  sequenced: z.enum(["1", "true"]).optional().openapi({
+    description: "Only contacts currently enrolled in a sequence (active)",
+  }),
+  hasAttachment: z.enum(["1", "true"]).optional().openapi({
+    description: "Only rows with a (non-inline) attachment",
+  }),
+  from: z.string().optional().openapi({
+    description:
+      "Only rows whose sender (person, or a group participant) matches this name or address",
+  }),
+  category: z
+    .enum(["primary", "promotions", "social", "updates"])
+    .optional()
+    .openapi({ description: "Gmail-style category tab" }),
+  starred: z.enum(["1", "true"]).optional().openapi({
+    description: "Only rows the caller starred (Outlook: flagged)",
+  }),
+  pinned: z
+    .enum(["1", "true"])
+    .optional()
+    .openapi({ description: "Only rows the caller pinned" }),
+  after: z.coerce.number().int().optional().openapi({
+    description: "Only rows with activity at or after this unix second",
+  }),
+  before: z.coerce.number().int().optional().openapi({
+    description: "Only rows whose latest activity is before this unix second",
+  }),
+  subject: z.string().optional().openapi({
+    description: "Only rows with a message whose subject contains this",
+  }),
+  withTabCounts: z.enum(["1", "true"]).optional().openapi({
+    description:
+      "Also return per-category unread and new-since-last-viewed counts for the inbox",
+  }),
+  folder: z
+    .enum(["all", "inbox", "starred", "snoozed", "archive", "sent", "trash"])
+    .optional()
+    .default("all")
+    .openapi({
+      description:
+        "Mail folder, from the signed-in user's star/archive/snooze/trash state. `all` (default) ignores that state; `inbox` hides archived, snoozed and trashed rows and puts pinned rows first; `sent` keeps rows we have written to; every folder except `all` and `trash` hides trashed rows.",
+    }),
+  sort: z
+    .enum(["recency", "unread", "inbox", "attachments"])
+    .optional()
+    .default("recency")
+    .openapi({
+      description:
+        "Sort key. Direction is controlled by the separate `direction` param.",
+    }),
+  direction: z.enum(["asc", "desc"]).optional().openapi({
+    description:
+      "Sort direction. When omitted, defaults to the natural direction for the chosen sort key (recency/unread/attachments default to desc; inbox defaults to asc).",
+  }),
+  page: z.coerce.number().optional().default(1),
+  // Cap at 100 so post-pagination group hydration stays under D1's
+  // 100 bound-parameter limit (one `IN (...)` of page ids).
+  limit: z.coerce.number().min(1).max(100).optional().default(50),
+});
+
 const listGroupedPeopleRoute = createRoute({
   method: "get",
   path: "/grouped",
@@ -179,66 +259,17 @@ const listGroupedPeopleRoute = createRoute({
   description:
     "List people and group conversations together (sorted by most recent activity).",
   request: {
-    query: z.object({
-      q: z
-        .string()
-        .optional()
-        .openapi({ description: "Search person name/email" }),
-      recipient: z.string().optional().openapi({
-        description: "Filter to people who have emailed this inbox address",
-      }),
-      unread: z
-        .enum(["1", "true"])
-        .optional()
-        .openapi({ description: "Only people with unread emails" }),
-      drafts: z.enum(["1", "true"]).optional().openapi({
-        description:
-          "Only conversations where the current user has a reply draft",
-      }),
-      sequenced: z.enum(["1", "true"]).optional().openapi({
-        description: "Only contacts currently enrolled in a sequence (active)",
-      }),
-      hasAttachment: z.enum(["1", "true"]).optional().openapi({
-        description: "Only rows with a (non-inline) attachment",
-      }),
-      from: z.string().optional().openapi({
-        description:
-          "Only rows whose sender (person, or a group participant) matches this name or address",
-      }),
-      category: z
-        .enum(["primary", "promotions", "social", "updates"])
-        .optional()
-        .openapi({ description: "Gmail-style category tab" }),
-      folder: z
-        .enum(["all", "inbox", "starred", "snoozed", "archive", "sent"])
-        .optional()
-        .default("all")
-        .openapi({
-          description:
-            "Mail folder, from the signed-in user's star/archive/snooze state. `all` (default) ignores that state; `inbox` hides archived and snoozed rows and puts pinned rows first; `sent` keeps rows we have written to.",
-        }),
-      sort: z
-        .enum(["recency", "unread", "inbox", "attachments"])
-        .optional()
-        .default("recency")
-        .openapi({
-          description:
-            "Sort key. Direction is controlled by the separate `direction` param.",
-        }),
-      direction: z.enum(["asc", "desc"]).optional().openapi({
-        description:
-          "Sort direction. When omitted, defaults to the natural direction for the chosen sort key (recency/unread/attachments default to desc; inbox defaults to asc).",
-      }),
-      page: z.coerce.number().optional().default(1),
-      // Cap at 100 so post-pagination group hydration stays under D1's
-      // 100 bound-parameter limit (one `IN (...)` of page ids).
-      limit: z.coerce.number().min(1).max(100).optional().default(50),
-    }),
+    query: GroupedQuerySchema,
   },
   responses: {
     ...json200Response(
       z.object({
         data: z.array(GroupedItemSchema),
+        /** Present when `withTabCounts` is set. */
+        tabCounts: z
+          .record(z.string(), z.object({ unread: z.number(), new: z.number() }))
+          .nullable()
+          .optional(),
         total: z.number(),
         page: z.number(),
         limit: z.number(),
@@ -261,7 +292,17 @@ const listGroupedPeopleRoute = createRoute({
   },
 });
 
-peopleRouter.openapi(listGroupedPeopleRoute, async (c) => {
+type GroupedQuery = z.infer<typeof GroupedQuerySchema>;
+
+/**
+ * Every grouped row matching the query, with the caller's state applied,
+ * filtered and sorted — before paging. Shared by the list, the id listing
+ * (bulk actions over a whole folder) and the tab counts.
+ */
+async function computeGroupedRows(
+  c: Context<{ Bindings: CloudflareBindings; Variables: Variables }>,
+  query: GroupedQuery,
+) {
   const db = c.get("db");
   const user = c.get("user");
   const {
@@ -276,13 +317,15 @@ peopleRouter.openapi(listGroupedPeopleRoute, async (c) => {
     folder,
     sort,
     direction,
-    page,
-    limit,
-  } = c.req.valid("query");
+    starred: starredOnly,
+    pinned: pinnedOnly,
+    after,
+    before,
+    subject,
+  } = query;
   // Scope the drafts filter to the signed-in user. Empty id matches no
   // drafts, so the filter safely yields nothing if the user is somehow absent.
   const draftsUserId = user?.id ?? "";
-  const offset = (page - 1) * limit;
   // Resolve effective direction. Each sort key has a "natural" default
   // (recency/unread/attachments → desc, inbox → asc) so the UI can
   // pass `direction: undefined` to mean "use the natural one for this
@@ -597,6 +640,10 @@ peopleRouter.openapi(listGroupedPeopleRoute, async (c) => {
       st.snoozedUntil !== null && st.snoozedUntil > nowSec
         ? st.snoozedUntil
         : null;
+    r.trashedAt =
+      st.trashedAt !== null && st.trashedAt >= r.lastEmailAt
+        ? st.trashedAt
+        : null;
   }
   // Categories: one query per row kind for "has bulk-mail headers", then
   // sender heuristics in categorize().
@@ -624,8 +671,92 @@ peopleRouter.openapi(listGroupedPeopleRoute, async (c) => {
           // inbox decide.
           categorize([], promoConvs.has(r.id), [r.inbox]);
   }
+  // The caller's own "Move to <tab>" corrections win over the guess.
+  const overrides = await db
+    .select()
+    .from(categoryOverrides)
+    .where(eq(categoryOverrides.userId, user?.id ?? ""));
+  if (overrides.length > 0) {
+    const bySender = new Map(
+      overrides.map((o: any) => [o.senderEmail, o.category as MailCategory]),
+    );
+    for (const r of merged) {
+      if (r.type !== "person") continue;
+      const o = bySender.get(r.email.toLowerCase());
+      if (o) r.category = o;
+    }
+  }
+
+  // Inbox tab counts: unread rows per category, and how many of those
+  // arrived since the caller last opened that tab.
+  let tabCounts: Record<MailCategory, { unread: number; new: number }> | null =
+    null;
+  if (query.withTabCounts) {
+    const [pref] = await db
+      .select({ tabSeen: userPreferences.tabSeen })
+      .from(userPreferences)
+      .where(eq(userPreferences.userId, user?.id ?? ""))
+      .limit(1);
+    let seen: Record<string, number> = {};
+    try {
+      seen = pref?.tabSeen ? JSON.parse(pref.tabSeen) : {};
+    } catch {
+      seen = {};
+    }
+    tabCounts = {
+      primary: { unread: 0, new: 0 },
+      promotions: { unread: 0, new: 0 },
+      social: { unread: 0, new: 0 },
+      updates: { unread: 0, new: 0 },
+    };
+    for (const r of merged) {
+      if (r.archivedAt || r.snoozedUntil || r.trashedAt) continue;
+      if (r.unreadCount <= 0) continue;
+      const t = tabCounts[r.category];
+      t.unread++;
+      if (r.lastEmailAt > (seen[r.category] ?? 0)) t.new++;
+    }
+  }
+
   if (category) merged = merged.filter((r) => r.category === category);
   if (attachmentsOnly) merged = merged.filter((r) => r.hasAttachment === 1);
+  if (starredOnly) merged = merged.filter((r) => r.starred);
+  if (pinnedOnly) merged = merged.filter((r) => r.pinned);
+  if (after !== undefined)
+    merged = merged.filter((r) => r.lastEmailAt >= after);
+  if (before !== undefined)
+    merged = merged.filter((r) => r.lastEmailAt < before);
+  if (subject) {
+    const pattern = `%${escapeLike(subject)}%`;
+    const personHits = new Set(
+      (
+        await db.all<{ k: string }>(sql`
+          SELECT DISTINCT person_id AS k FROM ${emails}
+          WHERE conversation_id IS NULL AND subject LIKE ${pattern} ESCAPE '\\'
+          UNION
+          SELECT DISTINCT person_id AS k FROM ${sentEmails}
+          WHERE conversation_id IS NULL AND person_id IS NOT NULL AND subject LIKE ${pattern} ESCAPE '\\'
+        `)
+      ).map((r) => r.k),
+    );
+    const convHits = new Set(
+      (
+        await db.all<{ k: string }>(sql`
+          SELECT DISTINCT conversation_id AS k FROM ${emails}
+          WHERE conversation_id IS NOT NULL AND subject LIKE ${pattern} ESCAPE '\\'
+          UNION
+          SELECT DISTINCT conversation_id AS k FROM ${sentEmails}
+          WHERE conversation_id IS NOT NULL AND subject LIKE ${pattern} ESCAPE '\\'
+        `)
+      ).map((r) => r.k),
+    );
+    merged = merged.filter((r) =>
+      r.type === "person" ? personHits.has(r.id) : convHits.has(r.id),
+    );
+  }
+  // Trash hides a row everywhere except the Trash folder (and "all").
+  if (folder !== "all" && folder !== "trash")
+    merged = merged.filter((r) => !r.trashedAt);
 
   switch (folder) {
     case "inbox":
@@ -642,6 +773,9 @@ peopleRouter.openapi(listGroupedPeopleRoute, async (c) => {
       break;
     case "sent":
       merged = merged.filter((r) => r.hasSent);
+      break;
+    case "trash":
+      merged = merged.filter((r) => r.trashedAt);
       break;
   }
 
@@ -680,6 +814,16 @@ peopleRouter.openapi(listGroupedPeopleRoute, async (c) => {
   } else if (folder === "snoozed") {
     merged.sort((a, b) => (a.snoozedUntil ?? 0) - (b.snoozedUntil ?? 0));
   }
+  return { merged, tabCounts };
+}
+
+peopleRouter.openapi(listGroupedPeopleRoute, async (c) => {
+  const db = c.get("db");
+  const query = c.req.valid("query");
+  const { page, limit } = query;
+  const offset = (page - 1) * limit;
+  const { merged, tabCounts } = await computeGroupedRows(c, query);
+  type Row = (typeof merged)[number];
   const total = merged.length;
   // Aggregate stats over the FILTERED set (not just the page). The
   // table view's stat tiles read these so they don't lie when the
@@ -852,6 +996,7 @@ peopleRouter.openapi(listGroupedPeopleRoute, async (c) => {
   return c.json(
     {
       data,
+      tabCounts,
       total,
       page,
       limit,
@@ -864,6 +1009,104 @@ peopleRouter.openapi(listGroupedPeopleRoute, async (c) => {
     },
     200,
   );
+});
+
+const groupedIdsRoute = createRoute({
+  method: "get",
+  path: "/grouped/ids",
+  tags: ["People"],
+  description:
+    "Every row matching the same filters as /grouped, as `{type, id, unread}` refs (capped at 5000). Lets a client act on a whole folder — mark all read, archive all — without paging through it.",
+  request: { query: GroupedQuerySchema },
+  responses: {
+    ...json200Response(
+      z.object({
+        data: z.array(
+          z.object({
+            type: z.enum(["person", "group"]),
+            id: z.string(),
+            unread: z.boolean(),
+          }),
+        ),
+        total: z.number(),
+        truncated: z.boolean(),
+      }),
+      "Row refs",
+    ),
+  },
+});
+
+peopleRouter.openapi(groupedIdsRoute, async (c) => {
+  const { merged } = await computeGroupedRows(c, c.req.valid("query"));
+  const CAP = 5000;
+  return c.json(
+    {
+      data: merged.slice(0, CAP).map((r) => ({
+        type: r.type,
+        id: r.id,
+        unread: r.unreadCount > 0,
+      })),
+      total: merged.length,
+      truncated: merged.length > CAP,
+    },
+    200,
+  );
+});
+
+const categoryOverrideRoute = createRoute({
+  method: "put",
+  path: "/category",
+  tags: ["People"],
+  description:
+    'Move senders to a Gmail-style tab for the signed-in user ("Move to Primary"). `category: null` removes the correction.',
+  request: {
+    body: {
+      content: {
+        "application/json": {
+          schema: z.object({
+            senders: z.array(z.string().email()).min(1).max(100),
+            category: z
+              .enum(["primary", "promotions", "social", "updates"])
+              .nullable(),
+          }),
+        },
+      },
+    },
+  },
+  responses: {
+    ...json200Response(z.object({ success: z.boolean() }), "Saved"),
+  },
+});
+
+peopleRouter.openapi(categoryOverrideRoute, async (c) => {
+  const db = c.get("db");
+  const user = c.get("user");
+  const { senders, category } = c.req.valid("json");
+  const keys = [...new Set(senders.map((s) => s.toLowerCase()))];
+  if (category === null) {
+    await db
+      .delete(categoryOverrides)
+      .where(
+        and(
+          eq(categoryOverrides.userId, user.id),
+          inArray(categoryOverrides.senderEmail, keys),
+        ),
+      );
+  } else {
+    const now = Math.floor(Date.now() / 1000);
+    await db.batch(
+      keys.map((senderEmail) =>
+        db
+          .insert(categoryOverrides)
+          .values({ userId: user.id, senderEmail, category, updatedAt: now })
+          .onConflictDoUpdate({
+            target: [categoryOverrides.userId, categoryOverrides.senderEmail],
+            set: { category, updatedAt: now },
+          }),
+      ) as any,
+    );
+  }
+  return c.json({ success: true }, 200);
 });
 
 const listPeopleRoute = createRoute({
