@@ -6,6 +6,7 @@ import { attachments } from "../db/attachments.schema";
 import { sentEmails } from "../db/sent-emails.schema";
 import { drafts } from "../db/drafts.schema";
 import { sequenceEnrollments } from "../db/sequence-enrollments.schema";
+import { mailItemStates } from "../db/mail-item-states.schema";
 import { json200Response, escapeLike, escapeFts } from "../lib/helpers";
 import {
   getPersonScoped,
@@ -43,6 +44,16 @@ const GroupedPersonSchema = z.object({
   recipientCount: z.number(),
   recipients: z.array(z.string()),
   hasAttachment: z.number(),
+  // Per-user mail state (see mail_item_states) plus what the Gmail and
+  // Outlook layouts need to draw a row: last subject, a snippet and whether
+  // we have ever written to this thread.
+  starred: z.boolean(),
+  pinned: z.boolean(),
+  archivedAt: z.number().nullable(),
+  snoozedUntil: z.number().nullable(),
+  hasSent: z.boolean(),
+  latestSubject: z.string().nullable(),
+  snippet: z.string().nullable(),
 });
 
 // Group conversation row — represents a single multi-participant thread.
@@ -71,12 +82,32 @@ const GroupedConversationSchema = z.object({
   unreadCount: z.number(),
   totalCount: z.number(),
   hasAttachment: z.number(),
+  // Per-user mail state (see mail_item_states) plus what the Gmail and
+  // Outlook layouts need to draw a row: last subject, a snippet and whether
+  // we have ever written to this thread.
+  starred: z.boolean(),
+  pinned: z.boolean(),
+  archivedAt: z.number().nullable(),
+  snoozedUntil: z.number().nullable(),
+  hasSent: z.boolean(),
+  latestSubject: z.string().nullable(),
+  snippet: z.string().nullable(),
 });
 
 const GroupedItemSchema = z.discriminatedUnion("type", [
   GroupedPersonSchema,
   GroupedConversationSchema,
 ]);
+
+const EMPTY_ROW_STATE = {
+  starred: false,
+  pinned: false,
+  archivedAt: null as number | null,
+  snoozedUntil: null as number | null,
+  hasSent: false,
+  latestSubject: null as string | null,
+  snippet: null as string | null,
+};
 
 const listGroupedPeopleRoute = createRoute({
   method: "get",
@@ -104,6 +135,14 @@ const listGroupedPeopleRoute = createRoute({
       sequenced: z.enum(["1", "true"]).optional().openapi({
         description: "Only contacts currently enrolled in a sequence (active)",
       }),
+      folder: z
+        .enum(["all", "inbox", "starred", "snoozed", "archive", "sent"])
+        .optional()
+        .default("all")
+        .openapi({
+          description:
+            "Mail folder, from the signed-in user's star/archive/snooze state. `all` (default) ignores that state; `inbox` hides archived and snoozed rows and puts pinned rows first; `sent` keeps rows we have written to.",
+        }),
       sort: z
         .enum(["recency", "unread", "inbox", "attachments"])
         .optional()
@@ -157,6 +196,7 @@ peopleRouter.openapi(listGroupedPeopleRoute, async (c) => {
     unread,
     drafts: draftsOnly,
     sequenced,
+    folder,
     sort,
     direction,
     page,
@@ -240,10 +280,10 @@ peopleRouter.openapi(listGroupedPeopleRoute, async (c) => {
   // appear in the list, not just senders who have emailed us. We exclude
   // any rows with a non-null conversation_id — those belong under group rows.
   const activity = sql`(
-    SELECT person_id, recipient AS inbox, received_at AS at, is_read, conversation_id
+    SELECT person_id, recipient AS inbox, received_at AS at, is_read, conversation_id, 0 AS is_sent
     FROM ${emails}
     UNION ALL
-    SELECT person_id, from_address AS inbox, sent_at AS at, 1 AS is_read, conversation_id
+    SELECT person_id, from_address AS inbox, sent_at AS at, 1 AS is_read, conversation_id, 1 AS is_sent
     FROM ${sentEmails}
     WHERE person_id IS NOT NULL
   )`;
@@ -258,6 +298,7 @@ peopleRouter.openapi(listGroupedPeopleRoute, async (c) => {
     recipientCount: number;
     recipientsCsv: string | null;
     hasAttachment: number;
+    hasSent: number;
   }>(sql`
     SELECT
       s.id,
@@ -268,6 +309,7 @@ peopleRouter.openapi(listGroupedPeopleRoute, async (c) => {
       COUNT(*) AS totalCount,
       COUNT(DISTINCT e.inbox) AS recipientCount,
       GROUP_CONCAT(DISTINCT e.inbox) AS recipientsCsv,
+      MAX(e.is_sent) AS hasSent,
       EXISTS(
         SELECT 1 FROM ${attachments} a
         JOIN ${emails} e2 ON e2.id = a.email_id
@@ -293,6 +335,8 @@ peopleRouter.openapi(listGroupedPeopleRoute, async (c) => {
     recipientCount: r.recipientCount,
     recipients: r.recipientsCsv ? r.recipientsCsv.split(",") : [],
     hasAttachment: r.hasAttachment,
+    ...EMPTY_ROW_STATE,
+    hasSent: r.hasSent === 1,
   }));
 
   // ----- GROUP CONVERSATION ROWS (conversation_id IS NOT NULL) -----
@@ -369,6 +413,7 @@ peopleRouter.openapi(listGroupedPeopleRoute, async (c) => {
     unreadCount: number;
     totalCount: number;
     hasAttachment: number;
+    hasSent: number;
   }>(sql`
     SELECT
       g.conversation_id,
@@ -376,7 +421,8 @@ peopleRouter.openapi(listGroupedPeopleRoute, async (c) => {
       g.lastEmailAt,
       g.unreadCount,
       g.totalCount,
-      g.hasAttachment
+      g.hasAttachment,
+      g.hasSent
     FROM (
       SELECT
         conversation_id,
@@ -384,6 +430,7 @@ peopleRouter.openapi(listGroupedPeopleRoute, async (c) => {
         MAX(at) AS lastEmailAt,
         SUM(CASE WHEN is_read = 0 THEN 1 ELSE 0 END) AS unreadCount,
         COUNT(*) AS totalCount,
+        MAX(is_sent) AS hasSent,
         EXISTS(
           SELECT 1 FROM ${attachments} a
           JOIN ${emails} e2 ON e2.id = a.email_id
@@ -391,11 +438,11 @@ peopleRouter.openapi(listGroupedPeopleRoute, async (c) => {
           AND a.content_id IS NULL
         ) AS hasAttachment
       FROM (
-        SELECT conversation_id, recipient AS inbox, received_at AS at, is_read
+        SELECT conversation_id, recipient AS inbox, received_at AS at, is_read, 0 AS is_sent
         FROM ${emails}
         WHERE conversation_id IS NOT NULL
         UNION ALL
-        SELECT conversation_id, from_address AS inbox, sent_at AS at, 1 AS is_read
+        SELECT conversation_id, from_address AS inbox, sent_at AS at, 1 AS is_read, 1 AS is_sent
         FROM ${sentEmails}
         WHERE conversation_id IS NOT NULL
       ) act
@@ -421,6 +468,8 @@ peopleRouter.openapi(listGroupedPeopleRoute, async (c) => {
     unreadCount: r.unreadCount,
     totalCount: r.totalCount,
     hasAttachment: r.hasAttachment,
+    ...EMPTY_ROW_STATE,
+    hasSent: r.hasSent === 1,
   }));
 
   // Merge persons + groups, sort, paginate. Recency is the secondary
@@ -431,7 +480,50 @@ peopleRouter.openapi(listGroupedPeopleRoute, async (c) => {
   type Row = (typeof personRows)[number] | (typeof groupRows)[number];
   const inboxOf = (r: Row): string =>
     r.type === "person" ? (r.recipients[0] ?? "") : r.inbox;
-  const merged: Row[] = [...personRows, ...groupRows];
+  let merged: Row[] = [...personRows, ...groupRows];
+
+  // Apply the caller's star / pin / archive / snooze state, then the folder.
+  const stateRows = await db
+    .select()
+    .from(mailItemStates)
+    .where(eq(mailItemStates.userId, user?.id ?? ""));
+  const stateByKey = new Map(
+    stateRows.map((s) => [`${s.itemType}:${s.itemId}`, s]),
+  );
+  const nowSec = Math.floor(Date.now() / 1000);
+  for (const r of merged) {
+    const st = stateByKey.get(`${r.type}:${r.id}`);
+    if (!st) continue;
+    r.starred = st.starred === 1;
+    r.pinned = st.pinned === 1;
+    // New mail after the archive brings the row back, like Gmail.
+    r.archivedAt =
+      st.archivedAt !== null && st.archivedAt >= r.lastEmailAt
+        ? st.archivedAt
+        : null;
+    r.snoozedUntil =
+      st.snoozedUntil !== null && st.snoozedUntil > nowSec
+        ? st.snoozedUntil
+        : null;
+  }
+  switch (folder) {
+    case "inbox":
+      merged = merged.filter((r) => !r.archivedAt && !r.snoozedUntil);
+      break;
+    case "starred":
+      merged = merged.filter((r) => r.starred);
+      break;
+    case "snoozed":
+      merged = merged.filter((r) => r.snoozedUntil);
+      break;
+    case "archive":
+      merged = merged.filter((r) => r.archivedAt);
+      break;
+    case "sent":
+      merged = merged.filter((r) => r.hasSent);
+      break;
+  }
+
   const sign = effectiveDirection === "asc" ? -1 : 1;
   switch (sort) {
     case "unread":
@@ -461,6 +553,12 @@ peopleRouter.openapi(listGroupedPeopleRoute, async (c) => {
       merged.sort((a, b) => sign * (b.lastEmailAt - a.lastEmailAt));
       break;
   }
+  if (folder === "inbox") {
+    // Stable sort keeps the chosen order within the pinned and unpinned sets.
+    merged.sort((a, b) => Number(b.pinned) - Number(a.pinned));
+  } else if (folder === "snoozed") {
+    merged.sort((a, b) => (a.snoozedUntil ?? 0) - (b.snoozedUntil ?? 0));
+  }
   const total = merged.length;
   // Aggregate stats over the FILTERED set (not just the page). The
   // table view's stat tiles read these so they don't lie when the
@@ -476,6 +574,58 @@ peopleRouter.openapi(listGroupedPeopleRoute, async (c) => {
     totalUnreadEmails += r.unreadCount;
   }
   const data = merged.slice(offset, offset + limit);
+
+  // Latest subject and a short snippet for each row on this page, for the
+  // Gmail and Outlook list layouts. One query per row kind, each binding the
+  // page ids once (limit <= 100 keeps us under D1's parameter cap).
+  const pagePersonIds = data
+    .filter((r) => r.type === "person")
+    .map((r) => r.id);
+  const pageConvIds = data.filter((r) => r.type === "group").map((r) => r.id);
+  // Each table is queried on its own so the page ids are bound once per
+  // statement; the newer of the two rows wins.
+  type Latest = { subject: string | null; body: string | null; at: number };
+  const latestFor = async (
+    column: "person_id" | "conversation_id",
+    ids: string[],
+  ) => {
+    const out = new Map<string, Latest>();
+    if (ids.length === 0) return out;
+    const keyCol = sql.raw(column);
+    const onlyOneToOne =
+      column === "person_id" ? sql`AND conversation_id IS NULL` : sql``;
+    for (const [table, atCol] of [
+      [emails, sql.raw("received_at")],
+      [sentEmails, sql.raw("sent_at")],
+    ] as const) {
+      const rows = await db.all<Latest & { k: string }>(sql`
+        SELECT k, subject, body, at FROM (
+          SELECT ${keyCol} AS k, subject, substr(body_text, 1, 400) AS body,
+            ${atCol} AS at,
+            ROW_NUMBER() OVER (PARTITION BY ${keyCol} ORDER BY ${atCol} DESC) AS rn
+          FROM ${table} WHERE ${keyCol} IN ${ids} ${onlyOneToOne}
+        ) WHERE rn = 1
+      `);
+      for (const r of rows) {
+        const prev = out.get(r.k);
+        if (!prev || r.at > prev.at) out.set(r.k, r);
+      }
+    }
+    return out;
+  };
+  const latestByPerson = await latestFor("person_id", pagePersonIds);
+  const latestByConv = await latestFor("conversation_id", pageConvIds);
+  for (const row of data) {
+    const latest =
+      row.type === "person"
+        ? latestByPerson.get(row.id)
+        : latestByConv.get(row.id);
+    if (!latest) continue;
+    row.latestSubject = latest.subject;
+    row.snippet = latest.body
+      ? latest.body.replace(/\s+/g, " ").trim().slice(0, 200)
+      : null;
+  }
 
   // Hydrate participants + CC only for group rows on this page.
   // Limit is capped at 100; each follow-up binds the page ids once (split
