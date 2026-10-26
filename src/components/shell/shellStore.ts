@@ -8,6 +8,8 @@ const RAIL_KEY = "saasmail.railCollapsed";
 
 interface ShellState {
   cmdk: boolean;
+  /** The keyboard shortcuts sheet ("?"). */
+  keys: boolean;
   railShut: boolean;
 }
 
@@ -21,6 +23,7 @@ function readRail(): boolean {
 
 let state: ShellState = {
   cmdk: false,
+  keys: false,
   railShut: typeof window === "undefined" ? false : readRail(),
 };
 const listeners = new Set<() => void>();

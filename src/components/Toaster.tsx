@@ -67,7 +67,7 @@ export default function Toaster() {
   return createPortal(
     <div
       aria-live="polite"
-      className="pointer-events-none fixed bottom-4 left-3 right-3 z-[60] flex max-w-[380px] flex-col gap-2 sm:bottom-6 sm:left-6 sm:right-auto sm:w-full"
+      className="sm-toaster pointer-events-none fixed bottom-4 left-3 right-3 z-[60] flex max-w-[380px] flex-col gap-2 sm:bottom-6 sm:left-6 sm:right-auto sm:w-full"
       style={{
         bottom: "max(1rem, calc(env(safe-area-inset-bottom) + 0.5rem))",
       }}

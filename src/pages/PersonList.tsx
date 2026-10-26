@@ -17,6 +17,7 @@ import {
   type GroupedConversation,
 } from "@/lib/api";
 import GroupRow from "@/components/GroupRow";
+import SwipeRow from "@/components/SwipeRow";
 import {
   MailActionButtons,
   MailRowMenu,
@@ -205,7 +206,13 @@ export default function PersonList({
               </p>
             </div>
           ) : (
-            <ul className={cn(loading && "opacity-60 transition-opacity")}>
+            <ul
+              className={cn(
+                // Clear the phone's floating Compose button.
+                "pb-24 sm:pb-0",
+                loading && "opacity-60 transition-opacity",
+              )}
+            >
               {items.map((item) => {
                 if (item.type === "group") {
                   return (
@@ -239,20 +246,31 @@ export default function PersonList({
                 };
                 const hasMenu = !compact && Object.keys(handlers).length > 0;
                 return (
-                  <li
+                  <SwipeRow
                     key={person.id}
-                    className={cn(
-                      "group relative border-b border-border-subtle transition-colors",
+                    className="group border-b border-border-subtle"
+                    innerClassName={cn(
+                      "transition-colors",
                       isSelected
                         ? "bg-accent-subtle/70"
                         : isChecked
                           ? "bg-accent-subtle/40"
-                          : "hover:bg-bg-subtle",
+                          : "[@media(hover:hover)]:hover:bg-bg-subtle",
                     )}
+                    onSwipeLeft={handlers.onArchive}
+                    onSwipeRight={handlers.onToggleStar}
+                    archived={!!person.archivedAt}
+                    starred={person.starred}
                   >
                     {isSelected && (
                       <span
                         className="absolute inset-y-0 left-0 w-[3px] bg-accent"
+                        aria-hidden
+                      />
+                    )}
+                    {unread && !compact && (
+                      <span
+                        className="absolute left-[6px] top-[calc(var(--sm-row-pad)+19px)] h-1.5 w-1.5 rounded-full bg-accent"
                         aria-hidden
                       />
                     )}
@@ -261,9 +279,10 @@ export default function PersonList({
                       data-testid="person-row"
                       data-person-id={person.id}
                       onClick={() => onSelectPerson(person)}
+                      aria-current={isSelected ? "true" : undefined}
                       className={cn(
-                        "flex w-full items-start gap-3 py-[calc(var(--sm-row-pad)+2px)] pl-4 pr-3 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40",
-                        compact && "items-center justify-center px-2",
+                        "flex w-full items-center gap-3 py-[calc(var(--sm-row-pad)+1px)] pl-4 pr-3 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/50",
+                        compact && "justify-center px-2",
                       )}
                     >
                       {/* Avatar slot. On hover (or while anything is
@@ -334,19 +353,23 @@ export default function PersonList({
                         )}
                       </span>
 
+                      {/* Two lines: who + when, then what. Counts and
+                          inboxes live in the reading pane and Table view. */}
                       <div
                         className={cn("min-w-0 flex-1", compact && "hidden")}
                       >
                         <div className="flex items-baseline gap-2">
                           <span
                             className={cn(
-                              "min-w-0 flex-1 truncate text-sm text-text-primary",
-                              unread ? "font-semibold" : "font-medium",
+                              "min-w-0 flex-1 truncate text-sm",
+                              unread
+                                ? "font-semibold text-text-primary"
+                                : "font-medium text-text-primary",
                             )}
                           >
                             {display}
                             {person.name && (
-                              <span className="ml-1.5 font-normal text-text-tertiary">
+                              <span className="ml-1.5 text-[13px] font-normal text-text-tertiary">
                                 {person.email}
                               </span>
                             )}
@@ -355,10 +378,10 @@ export default function PersonList({
                             className={cn(
                               "flex shrink-0 items-center gap-1.5 text-xs transition-opacity",
                               unread
-                                ? "font-medium text-text-primary"
+                                ? "font-semibold text-accent-subtle-fg"
                                 : "text-text-tertiary",
                               hasMenu &&
-                                "[@media(hover:hover)]:group-hover:opacity-0 [@media(hover:none)]:mr-7",
+                                "[@media(hover:hover)]:group-hover:opacity-0 [@media(hover:none)]:mr-8",
                             )}
                           >
                             {person.pinned && (
@@ -388,53 +411,45 @@ export default function PersonList({
                           </span>
                         </div>
 
-                        {(person.latestSubject || person.snippet) && (
-                          <p className="mt-0.5 truncate text-[13px] text-text-secondary">
+                        <div className="mt-0.5 flex items-center gap-2">
+                          <p className="min-w-0 flex-1 truncate text-[13px] text-text-tertiary">
                             {person.latestSubject && (
                               <span
                                 className={cn(
-                                  "text-text-primary",
-                                  unread && "font-medium",
+                                  unread
+                                    ? "font-medium text-text-primary"
+                                    : "text-text-secondary",
                                 )}
                               >
                                 {person.latestSubject}
                               </span>
                             )}
                             {person.latestSubject && person.snippet && (
-                              <span className="text-text-tertiary"> — </span>
+                              <span aria-hidden> — </span>
                             )}
                             {person.snippet}
+                            {!person.latestSubject && !person.snippet && (
+                              <span>
+                                {person.totalCount} email
+                                {person.totalCount !== 1 ? "s" : ""}
+                              </span>
+                            )}
                           </p>
-                        )}
-
-                        <div className="mt-1 flex items-center justify-between gap-2">
-                          <div className="flex min-w-0 items-center gap-1.5 text-xs text-text-tertiary">
-                            <span className="tabular">
-                              {person.totalCount} email
-                              {person.totalCount !== 1 ? "s" : ""}
-                            </span>
-                            {person.recipientCount > 1 && (
-                              <>
-                                <span aria-hidden>·</span>
-                                <span>{person.recipientCount} inboxes</span>
-                              </>
-                            )}
-                            {person.hasAttachment === 1 && (
-                              <Paperclip
-                                size={11}
-                                className="text-text-tertiary"
-                                aria-label="Has attachment"
-                              />
-                            )}
-                          </div>
-
+                          {person.hasAttachment === 1 && (
+                            <Paperclip
+                              size={12}
+                              className="shrink-0 text-text-tertiary"
+                              aria-label="Has attachment"
+                            />
+                          )}
                           {/* Click the unread badge to mark all read. */}
                           {unread && (
                             <span
                               role="button"
                               tabIndex={0}
                               data-testid="person-unread-badge"
-                              title="Mark all as read"
+                              title="Mark all as read (Shift+I)"
+                              aria-label={`${person.unreadCount} unread. Mark all as read`}
                               onClick={(e) => {
                                 e.stopPropagation();
                                 onMarkPersonRead?.(person.id);
@@ -446,7 +461,7 @@ export default function PersonList({
                                   onMarkPersonRead?.(person.id);
                                 }
                               }}
-                              className="group/badge tabular flex h-5 min-w-5 cursor-pointer items-center justify-center rounded-full bg-accent px-1.5 text-[11px] font-semibold text-accent-foreground transition-transform active:scale-95"
+                              className="group/badge tabular flex h-[18px] min-w-[18px] shrink-0 cursor-pointer items-center justify-center rounded-full bg-accent px-1.5 text-[11px] font-semibold text-accent-foreground transition-transform active:scale-95"
                             >
                               <span className="group-hover/badge:hidden">
                                 {person.unreadCount}
@@ -462,7 +477,7 @@ export default function PersonList({
                     </button>
 
                     {hasMenu && (
-                      <div className="absolute right-2 top-1.5 flex items-center gap-0.5">
+                      <div className="absolute right-2 top-1 flex items-center gap-0.5">
                         {/* Desktop hover bar */}
                         <div className="hidden rounded-lg bg-card/95 shadow-card ring-1 ring-border [@media(hover:hover)]:group-hover:flex [@media(hover:hover)]:group-has-[:focus-visible]:flex">
                           <MailActionButtons
@@ -476,15 +491,15 @@ export default function PersonList({
                             personId={person.id}
                           />
                         </div>
-                        {/* Touch: just the menu */}
+                        {/* Touch: the menu, with a full-size hit area */}
                         <MailRowMenu
                           state={person}
                           handlers={handlers}
-                          className="-mr-1 -mt-0.5 h-7 w-7 [@media(hover:hover)]:hidden"
+                          className="-mr-1.5 -mt-0.5 h-10 w-10 [@media(hover:hover)]:hidden"
                         />
                       </div>
                     )}
-                  </li>
+                  </SwipeRow>
                 );
               })}
             </ul>
@@ -493,7 +508,7 @@ export default function PersonList({
       </div>
 
       {totalPages > 1 && (
-        <div className="flex h-11 shrink-0 items-center justify-between border-t border-border px-3">
+        <div className="flex h-11 shrink-0 items-center justify-between border-t border-border px-3 max-sm:pr-[88px]">
           <button
             onClick={() => onPageChange(Math.max(1, page - 1))}
             disabled={page <= 1}

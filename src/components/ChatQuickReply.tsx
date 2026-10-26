@@ -237,8 +237,11 @@ export default function ChatQuickReply({
           <span className="text-xs text-destructive">{error}</span>
         ) : (
           <span className="text-xs text-text-tertiary">
-            Sending from <span className="font-medium">{inboxAddress}</span> ·
-            ⌘/Ctrl + Enter to send
+            Sending from <span className="font-medium">{inboxAddress}</span>
+            {/* No keyboard on touch screens: skip the shortcut hint. */}
+            <span className="[@media(hover:none)]:hidden">
+              {" · "}⌘/Ctrl + Enter to send
+            </span>
             {onOpenCompose && (
               <>
                 {" · "}

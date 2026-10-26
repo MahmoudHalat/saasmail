@@ -78,7 +78,13 @@ export default function AdminUsersPage() {
   const [users, setUsers] = useState<User[]>([]);
   const [invites, setInvites] = useState<Invite[]>([]);
   const [loading, setLoading] = useState(true);
-  const [inviteDialogOpen, setInviteDialogOpen] = useState(false);
+  // `?invite=1` (the command palette's "Invite a teammate") opens the
+  // invite dialog straight away.
+  const [inviteDialogOpen, setInviteDialogOpen] = useState(
+    () =>
+      typeof window !== "undefined" &&
+      new URLSearchParams(window.location.search).get("invite") === "1",
+  );
   const [inviteRole, setInviteRole] = useState<"admin" | "member">("member");
   const [inviteEmail, setInviteEmail] = useState("");
   const [inviteExpiry, setInviteExpiry] = useState("7");

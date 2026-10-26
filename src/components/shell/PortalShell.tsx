@@ -1,9 +1,23 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { useLocation } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import Rail from "./Rail";
 import TopBand from "./TopBand";
 import CommandPalette from "./CommandPalette";
+import ShortcutsSheet from "./ShortcutsSheet";
 import { shellStore } from "./shellStore";
+import { MAIL_VIEWS, mailViewHref } from "./nav";
+import { shouldIgnoreKey } from "@/lib/shortcuts";
+
+/** Second key of a "g" chord → mail view id. */
+const GO_TO: Record<string, string> = {
+  i: "inbox",
+  s: "starred",
+  b: "snoozed",
+  t: "sent",
+  d: "drafts",
+  a: "archive",
+  q: "sequenced",
+};
 
 function useMediaQuery(q: string): boolean {
   const [m, setM] = useState(() =>
@@ -35,6 +49,9 @@ export default function PortalShell({
   const [navOpen, setNavOpen] = useState(false);
   const scroller = useRef<HTMLDivElement>(null);
   const { pathname } = useLocation();
+  const navigate = useNavigate();
+  const onComposeRef = useRef(onCompose);
+  onComposeRef.current = onCompose;
 
   useEffect(() => {
     if (scroller.current) scroller.current.scrollTop = 0;
@@ -60,6 +77,47 @@ export default function PortalShell({
     return () => document.removeEventListener("keydown", onKey);
   }, []);
 
+  // App-wide single keys: "?" shortcuts, "c" compose, "/" search, and
+  // "g" then a letter to jump to a mail view. The inbox adds its own
+  // (j/k, e, s…) in InboxPage.
+  useEffect(() => {
+    let chordUntil = 0;
+    const onKey = (e: KeyboardEvent) => {
+      if (shouldIgnoreKey(e)) return;
+      const s = shellStore.get();
+      if (s.cmdk || s.keys) return;
+      if (Date.now() < chordUntil) {
+        chordUntil = 0;
+        const view = MAIL_VIEWS.find((v) => v.id === GO_TO[e.key]);
+        if (view) {
+          e.preventDefault();
+          navigate(mailViewHref(view));
+        }
+        return;
+      }
+      if (e.key === "?") {
+        e.preventDefault();
+        shellStore.set({ keys: true });
+      } else if (e.key === "g") {
+        chordUntil = Date.now() + 1200;
+      } else if (e.key === "c") {
+        e.preventDefault();
+        onComposeRef.current();
+      } else if (e.key === "/") {
+        e.preventDefault();
+        const search = document.querySelector<HTMLInputElement>(
+          '[data-testid="person-search-input"]',
+        );
+        if (search) {
+          search.focus();
+          search.select();
+        } else shellStore.set({ cmdk: true });
+      }
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [navigate]);
+
   return (
     <div className={`pt-app${drawer && navOpen ? " nav-open" : ""}`}>
       <a
@@ -78,7 +136,8 @@ export default function PortalShell({
           </div>
         </main>
       </div>
-      <CommandPalette />
+      <CommandPalette onCompose={onCompose} />
+      <ShortcutsSheet />
     </div>
   );
 }

@@ -165,7 +165,12 @@ export default function InboxToolbar({
               </Button>
             )}
             {onCompose && (
-              <Button onClick={onCompose} className="hidden sm:inline-flex">
+              <Button
+                onClick={onCompose}
+                className="hidden sm:inline-flex"
+                title="New message (C)"
+                aria-keyshortcuts="c"
+              >
                 <PenSquare />
                 Compose
               </Button>
@@ -184,8 +189,33 @@ export default function InboxToolbar({
             placeholder="Search people and mail"
             value={search}
             onChange={(e) => onSearchChange(e.target.value)}
-            className="h-9 w-full rounded-lg border border-border-strong bg-card pl-8 pr-8 text-sm text-text-primary shadow-card transition-[border-color,box-shadow] placeholder:text-text-tertiary hover:border-text-tertiary/60 focus:border-accent focus:outline-none focus:ring-3 focus:ring-accent/15"
+            aria-keyshortcuts="/"
+            onKeyDown={(e) => {
+              // Esc leaves the field so j/k work again; Enter or ↓ jumps
+              // to the first result.
+              if (e.key === "Escape") {
+                e.preventDefault();
+                e.currentTarget.blur();
+              } else if (e.key === "Enter" || e.key === "ArrowDown") {
+                const first = document.querySelector<HTMLElement>(
+                  '[data-testid="person-row"],[data-testid="group-row"]',
+                );
+                if (first) {
+                  e.preventDefault();
+                  first.focus();
+                }
+              }
+            }}
+            className="peer h-9 w-full rounded-lg border border-border-strong bg-card pl-8 pr-8 text-sm text-text-primary shadow-card transition-[border-color,box-shadow] placeholder:text-text-tertiary hover:border-text-tertiary/60 focus:border-accent focus:outline-none focus:ring-3 focus:ring-accent/15"
           />
+          {!search && (
+            <kbd
+              aria-hidden
+              className="pointer-events-none absolute right-2 top-1/2 hidden h-5 min-w-5 -translate-y-1/2 place-items-center rounded border border-border bg-bg-subtle px-1 font-sans text-[11px] text-text-tertiary peer-focus:hidden sm:grid"
+            >
+              /
+            </kbd>
+          )}
           {search && (
             <button
               data-testid="person-search-clear"

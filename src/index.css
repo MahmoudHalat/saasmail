@@ -942,7 +942,16 @@ body {
   border-radius: 6px;
 }
 
-/* The mobile Compose button would cover an open thread's reply bar. */
-html:has([data-thread-open]) .compose-fab {
+/* Phones: lift toasts above an open thread's reply bar. */
+@media (max-width: 639.98px) {
+  html:has([data-thread-open]) .sm-toaster {
+    bottom: calc(env(safe-area-inset-bottom) + 108px) !important;
+  }
+}
+
+/* The mobile Compose button would cover an open thread's reply bar or the
+   selection bar. */
+html:has([data-thread-open]) .compose-fab,
+html:has([data-selecting]) .compose-fab {
   display: none;
 }

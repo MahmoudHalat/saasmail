@@ -1,4 +1,5 @@
 import { Clock, Paperclip, Pin, Star, Users } from "lucide-react";
+import SwipeRow from "@/components/SwipeRow";
 import { cn } from "@/lib/utils";
 import type { GroupedConversation } from "@/lib/api";
 import { avatarColor, initials } from "@/lib/avatar";
@@ -87,15 +88,28 @@ export default function GroupRow({
   const hasMenu = !compact && !!actions;
 
   return (
-    <li
-      className={cn(
-        "group relative border-b border-border-subtle transition-colors",
-        isSelected ? "bg-accent-subtle/70" : "hover:bg-bg-subtle",
+    <SwipeRow
+      className="group border-b border-border-subtle"
+      innerClassName={cn(
+        "transition-colors",
+        isSelected
+          ? "bg-accent-subtle/70"
+          : "[@media(hover:hover)]:hover:bg-bg-subtle",
       )}
+      onSwipeLeft={actions?.onArchive}
+      onSwipeRight={actions?.onToggleStar}
+      archived={!!group.archivedAt}
+      starred={group.starred}
     >
       {isSelected && (
         <span
           className="absolute inset-y-0 left-0 w-[3px] bg-accent"
+          aria-hidden
+        />
+      )}
+      {unread && !compact && (
+        <span
+          className="absolute left-[6px] top-[calc(var(--sm-row-pad)+19px)] h-1.5 w-1.5 rounded-full bg-accent"
           aria-hidden
         />
       )}
@@ -104,14 +118,15 @@ export default function GroupRow({
         data-testid="group-row"
         data-conversation-id={group.id}
         onClick={onSelect}
+        aria-current={isSelected ? "true" : undefined}
         className={cn(
-          "flex w-full items-start gap-3 py-[calc(var(--sm-row-pad)+2px)] pl-4 pr-3 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40",
-          compact && "items-center justify-center px-2",
+          "flex w-full items-center gap-3 py-[calc(var(--sm-row-pad)+1px)] pl-4 pr-3 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/50",
+          compact && "justify-center px-2",
         )}
       >
         {/* Horizontally stacked avatars. */}
         <span
-          className="relative mt-0.5 shrink-0"
+          className="relative shrink-0"
           style={{ width: stackWidth, height: AVATAR_SIZE }}
         >
           {visible.map((p, i) => {
@@ -164,10 +179,10 @@ export default function GroupRow({
                 className={cn(
                   "flex shrink-0 items-center gap-1.5 text-xs transition-opacity",
                   unread
-                    ? "font-medium text-text-primary"
+                    ? "font-semibold text-accent-subtle-fg"
                     : "text-text-tertiary",
                   hasMenu &&
-                    "[@media(hover:hover)]:group-hover:opacity-0 [@media(hover:none)]:mr-7",
+                    "[@media(hover:hover)]:group-hover:opacity-0 [@media(hover:none)]:mr-8",
                 )}
               >
                 {group.pinned && (
@@ -191,43 +206,40 @@ export default function GroupRow({
               </span>
             </div>
 
-            {(group.latestSubject || group.snippet) && (
-              <p className="mt-0.5 truncate text-[13px] text-text-secondary">
+            <div className="mt-0.5 flex items-center gap-2">
+              <p className="min-w-0 flex-1 truncate text-[13px] text-text-tertiary">
+                <span className="mr-1.5 inline-flex h-[17px] items-center rounded bg-bg-muted px-1 align-[1px] text-[11px] font-medium text-text-secondary">
+                  {group.inbox.split("@")[0]}
+                </span>
                 {group.latestSubject && (
                   <span
-                    className={cn("text-text-primary", unread && "font-medium")}
+                    className={cn(
+                      unread
+                        ? "font-medium text-text-primary"
+                        : "text-text-secondary",
+                    )}
                   >
                     {group.latestSubject}
                   </span>
                 )}
                 {group.latestSubject && group.snippet && (
-                  <span className="text-text-tertiary"> — </span>
+                  <span aria-hidden> — </span>
                 )}
                 {group.snippet}
               </p>
-            )}
-
-            <div className="mt-1 flex items-center justify-between gap-2">
-              <div className="flex min-w-0 items-center gap-1.5 text-xs text-text-tertiary">
-                <span className="truncate">{group.inbox.split("@")[0]}</span>
-                <span aria-hidden>·</span>
-                <span className="tabular">
-                  {group.totalCount} message{group.totalCount !== 1 ? "s" : ""}
-                </span>
-                {group.hasAttachment === 1 && (
-                  <Paperclip
-                    size={11}
-                    className="text-text-tertiary"
-                    aria-label="Has attachment"
-                  />
-                )}
-              </div>
-
+              {group.hasAttachment === 1 && (
+                <Paperclip
+                  size={12}
+                  className="shrink-0 text-text-tertiary"
+                  aria-label="Has attachment"
+                />
+              )}
               {unread && (
                 <span
                   role="button"
                   tabIndex={0}
-                  title="Mark all as read"
+                  title="Mark all as read (Shift+I)"
+                  aria-label={`${group.unreadCount} unread. Mark all as read`}
                   onClick={(e) => {
                     e.stopPropagation();
                     onMarkRead?.(group.id);
@@ -239,7 +251,7 @@ export default function GroupRow({
                       onMarkRead?.(group.id);
                     }
                   }}
-                  className="tabular flex h-5 min-w-5 cursor-pointer items-center justify-center rounded-full bg-accent px-1.5 text-[11px] font-semibold text-accent-foreground"
+                  className="tabular flex h-[18px] min-w-[18px] shrink-0 cursor-pointer items-center justify-center rounded-full bg-accent px-1.5 text-[11px] font-semibold text-accent-foreground"
                 >
                   {group.unreadCount}
                 </span>
@@ -257,7 +269,7 @@ export default function GroupRow({
       </button>
 
       {hasMenu && (
-        <div className="absolute right-2 top-1.5 flex items-center gap-0.5">
+        <div className="absolute right-2 top-1 flex items-center gap-0.5">
           <div className="hidden rounded-lg bg-card/95 shadow-card ring-1 ring-border [@media(hover:hover)]:group-hover:flex [@media(hover:hover)]:group-has-[:focus-visible]:flex">
             <MailActionButtons state={group} handlers={handlers} />
             <MailRowMenu state={group} handlers={handlers} />
@@ -265,10 +277,10 @@ export default function GroupRow({
           <MailRowMenu
             state={group}
             handlers={handlers}
-            className="-mr-1 -mt-0.5 h-7 w-7 [@media(hover:hover)]:hidden"
+            className="-mr-1.5 -mt-0.5 h-10 w-10 [@media(hover:hover)]:hidden"
           />
         </div>
       )}
-    </li>
+    </SwipeRow>
   );
 }

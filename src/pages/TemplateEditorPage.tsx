@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo } from "react";
+import { useUnsavedGuard } from "@/hooks/useUnsavedGuard";
 import { useParams, useNavigate, Link } from "react-router-dom";
 import {
   ArrowLeft,
@@ -78,6 +79,14 @@ export default function TemplateEditorPage() {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(isEdit);
   const [viewMode, setViewMode] = useState<ViewMode>("split");
+  // What was last loaded or saved, to tell when there are unsaved edits.
+  const [saved, setSaved] = useState(() =>
+    JSON.stringify({ name: "", slugValue: "", subject: "", bodyHtml: "" }),
+  );
+  const dirty =
+    !loading &&
+    JSON.stringify({ name, slugValue, subject, bodyHtml }) !== saved;
+  const { confirmLeave, release } = useUnsavedGuard(dirty);
 
   // A section left open mid-keystroke (e.g. typing "{{#items}}" before its
   // closing tag) is a normal, transient state, not a bug — fall back to an
@@ -107,6 +116,14 @@ export default function TemplateEditorPage() {
         setSlugValue(t.slug);
         setSubject(t.subject);
         setBodyHtml(t.bodyHtml);
+        setSaved(
+          JSON.stringify({
+            name: t.name,
+            slugValue: t.slug,
+            subject: t.subject,
+            bodyHtml: t.bodyHtml,
+          }),
+        );
       })
       .catch(() => setError("Template not found"))
       .finally(() => setLoading(false));
@@ -122,6 +139,7 @@ export default function TemplateEditorPage() {
       } else {
         await createTemplate({ slug: slugValue, name, subject, bodyHtml });
       }
+      release();
       navigate("/templates");
     } catch {
       setError("Failed to save template");
@@ -167,7 +185,7 @@ export default function TemplateEditorPage() {
             <Button
               type="button"
               variant="outline"
-              onClick={() => navigate("/templates")}
+              onClick={() => confirmLeave() && navigate("/templates")}
             >
               Cancel
             </Button>

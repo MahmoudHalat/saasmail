@@ -1,6 +1,6 @@
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useCallback } from "react";
 import * as DialogPrimitive from "@radix-ui/react-dialog";
-import { PenSquare, Send, X } from "lucide-react";
+import { Check, PenSquare, Send, X } from "lucide-react";
 import TiptapEditor from "@/components/TiptapEditor";
 import CcInput from "@/components/CcInput";
 import {
@@ -8,7 +8,15 @@ import {
   TrayMetaRow,
   trayContentClass,
 } from "@/components/Tray";
-import { sendEmail, fetchStats, type CcEntry } from "@/lib/api";
+import {
+  sendEmail,
+  fetchStats,
+  type CcEntry,
+  type EmailTemplate,
+} from "@/lib/api";
+import RecipientInput from "@/components/RecipientInput";
+import { TemplatePicker, TemplateVarsBar } from "@/components/ComposeTemplates";
+import { showToast } from "@/lib/toast";
 import { useDraftAutosave } from "@/lib/use-draft-autosave";
 import { dispatchEmailSent } from "@/lib/email-events";
 import { getFromLabel } from "@/lib/format";
@@ -81,6 +89,17 @@ export default function ComposeModal({
   // Compact tray vs. full-viewport. Toggled by the maximize button in
   // the header; reset every time the drawer reopens.
   const [fullscreen, setFullscreen] = useState(false);
+  // Recipient chosen from suggestions (its name prefills template fields).
+  const [toPerson, setToPerson] = useState<{
+    email: string;
+    name: string | null;
+  } | null>(null);
+  const [pendingTemplate, setPendingTemplate] = useState<EmailTemplate | null>(
+    null,
+  );
+  // While the To suggestions show, Esc closes them, not the window.
+  const [suggesting, setSuggesting] = useState(false);
+  const onSuggestingChange = useCallback((v: boolean) => setSuggesting(v), []);
 
   // Domains we own — used for the lime/neutral CC chip color.
   const internalDomains = useMemo(() => {
@@ -137,6 +156,8 @@ export default function ComposeModal({
       setError("");
       setFullscreen(false);
       setFiles([]);
+      setPendingTemplate(null);
+      setToPerson(null);
     }
     // We intentionally don't track `fromAddress` here — it's only used
     // as a sticky fallback above, not as a trigger to re-run.
@@ -166,7 +187,7 @@ export default function ComposeModal({
       prefill.bodyHtml ||
       (prefill.cc && prefill.cc.length > 0))
   );
-  const { clear: clearDraft } = useDraftAutosave({
+  const { clear: clearDraft, status: draftStatus } = useDraftAutosave({
     contextKey: "compose",
     enabled: open,
     isEmpty: composeIsEmpty,
@@ -209,8 +230,15 @@ export default function ComposeModal({
       clearDraft();
       setFiles([]);
       onClose();
+      showToast({
+        kind: "success",
+        message: "Message sent",
+        description: `To ${to}${subject.trim() ? ` · ${subject.trim()}` : ""}`,
+      });
     } catch {
-      setError("Failed to send email");
+      setError(
+        "Couldn't send. Your draft is saved; check the address and try again.",
+      );
     } finally {
       setSending(false);
     }
@@ -238,6 +266,9 @@ export default function ComposeModal({
         <DialogPrimitive.Overlay className="tray-overlay fixed inset-0 z-50" />
         <DialogPrimitive.Content
           onKeyDown={handleKeyDown}
+          onEscapeKeyDown={(e) => {
+            if (suggesting) e.preventDefault();
+          }}
           onInteractOutside={(e) => e.preventDefault()}
           onPointerDownOutside={(e) => e.preventDefault()}
           className={trayContentClass({ fullscreen, width: "compose" })}
@@ -290,14 +321,16 @@ export default function ComposeModal({
               </select>
             </TrayMetaRow>
             <TrayMetaRow label="To" htmlFor="compose-to">
-              <input
+              <RecipientInput
                 id="compose-to"
-                type="email"
                 value={to}
-                onChange={(e) => setTo(e.target.value)}
-                required
+                onChange={(v) => {
+                  setTo(v);
+                  if (toPerson && v !== toPerson.email) setToPerson(null);
+                }}
+                onPick={setToPerson}
+                onSuggestionsOpenChange={onSuggestingChange}
                 placeholder="recipient@example.com"
-                aria-label="To"
                 className="w-full bg-transparent py-2.5 pr-3 text-sm text-text-primary outline-none placeholder:text-text-tertiary"
               />
             </TrayMetaRow>
@@ -321,6 +354,29 @@ export default function ComposeModal({
               />
             </TrayMetaRow>
           </div>
+
+          {pendingTemplate && (
+            <TemplateVarsBar
+              key={pendingTemplate.id}
+              template={pendingTemplate}
+              recipient={toPerson ?? { email: to, name: null }}
+              onCancel={() => setPendingTemplate(null)}
+              onApply={(r) => {
+                setSubject(r.subject);
+                setBodyHtml(r.bodyHtml);
+                setPendingTemplate(null);
+                // Keep focus in the tray (so ⌘Enter still sends): move it
+                // to the message once the editor has the new content.
+                window.setTimeout(() => {
+                  document
+                    .querySelector<HTMLElement>(
+                      '[data-testid="compose-body"] .ProseMirror',
+                    )
+                    ?.focus();
+                }, 60);
+              }}
+            />
+          )}
 
           {/* Body — no min-height, just flex-1 so the editor fills the
               tray. The smooth-scroll wrapper keeps long drafts scrollable. */}
@@ -374,18 +430,47 @@ export default function ComposeModal({
                   {error}
                 </span>
               ) : (
-                <span className="hidden sm:inline">
-                  <kbd className="rounded border border-border bg-bg-subtle px-1 font-sans text-[11px]">
-                    ⌘
-                  </kbd>
-                  <kbd className="ml-1 rounded border border-border bg-bg-subtle px-1 font-sans text-[11px]">
-                    Enter
-                  </kbd>{" "}
-                  to send
+                <span className="flex items-center gap-3">
+                  <span
+                    aria-live="polite"
+                    className="inline-flex items-center gap-1"
+                  >
+                    {draftStatus === "saving" && "Saving draft…"}
+                    {draftStatus === "saved" && (
+                      <>
+                        <Check size={12} aria-hidden /> Draft saved
+                      </>
+                    )}
+                    {draftStatus === "error" && (
+                      <span className="text-warning">Draft not saved</span>
+                    )}
+                  </span>
+                  <span className="hidden sm:inline">
+                    <kbd className="rounded border border-border bg-bg-subtle px-1 font-sans text-[11px]">
+                      ⌘
+                    </kbd>
+                    <kbd className="ml-1 rounded border border-border bg-bg-subtle px-1 font-sans text-[11px]">
+                      Enter
+                    </kbd>{" "}
+                    to send
+                  </span>
                 </span>
               )}
             </div>
             <div className="flex shrink-0 items-center gap-2">
+              <TemplatePicker
+                onChoose={(t) => {
+                  const replacing = subject.trim() || !bodyIsEmpty;
+                  if (
+                    replacing &&
+                    !window.confirm(
+                      "Replace the subject and message with this template?",
+                    )
+                  )
+                    return;
+                  setPendingTemplate(t);
+                }}
+              />
               <AttachmentPicker
                 onFilesAdded={(added) =>
                   setFiles((prev) => [...prev, ...added])

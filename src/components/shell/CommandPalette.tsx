@@ -3,13 +3,22 @@ import { createPortal } from "react-dom";
 import { useNavigate } from "react-router-dom";
 import {
   CornerDownLeft,
+  FilePlus2,
+  Keyboard,
+  ListPlus,
+  Mails,
+  Moon,
   Palette,
+  PenSquare,
   Search,
   Settings as SettingsIcon,
+  Sun,
   User,
+  UserPlus,
   Users,
   type LucideIcon,
 } from "lucide-react";
+import { usePreferences } from "@/lib/preferences";
 import { useSession } from "@/lib/auth-client";
 import { fetchGroupedPeople, type GroupedItem } from "@/lib/api";
 import { ADMIN_LINKS, MAIL_VIEWS, WORKSPACE_LINKS, mailViewHref } from "./nav";
@@ -17,7 +26,7 @@ import { shellStore, useShell } from "./shellStore";
 
 interface Entry {
   key: string;
-  group: "Pages" | "People";
+  group: "Actions" | "Pages" | "People";
   label: string;
   meta?: string;
   icon: LucideIcon;
@@ -28,13 +37,18 @@ interface Entry {
  * ⌘K palette: jump to any page or mail view, and search people by name or
  * address. Opens from the top band's search button or the shortcut.
  */
-export default function CommandPalette() {
+export default function CommandPalette({
+  onCompose,
+}: {
+  onCompose?: () => void;
+}) {
   const open = useShell((s) => s.cmdk);
   if (!open) return null;
-  return createPortal(<Palette_ />, document.body);
+  return createPortal(<Palette_ onCompose={onCompose} />, document.body);
 }
 
-function Palette_() {
+function Palette_({ onCompose }: { onCompose?: () => void }) {
+  const { resolvedMode, setPreferences } = usePreferences();
   const navigate = useNavigate();
   const { data: session } = useSession();
   const isAdmin = session?.user?.role === "admin";
@@ -116,14 +130,85 @@ function Palette_() {
         run: go("/settings#appearance"),
       },
     ];
+    const act = (fn: () => void) => () => {
+      close();
+      fn();
+    };
+    const actions: Entry[] = [
+      ...(onCompose
+        ? [
+            {
+              key: "a:compose",
+              group: "Actions" as const,
+              label: "New message",
+              meta: "C",
+              icon: PenSquare,
+              run: act(onCompose),
+            },
+          ]
+        : []),
+      {
+        key: "a:template",
+        group: "Actions",
+        label: "New template",
+        icon: FilePlus2,
+        run: go("/templates/new"),
+      },
+      {
+        key: "a:sequence",
+        group: "Actions",
+        label: "New sequence",
+        icon: ListPlus,
+        run: go("/sequences/new"),
+      },
+      ...(isAdmin
+        ? [
+            {
+              key: "a:invite",
+              group: "Actions" as const,
+              label: "Invite a teammate",
+              icon: UserPlus,
+              run: go("/admin/users?invite=1"),
+            },
+            {
+              key: "a:connect",
+              group: "Actions" as const,
+              label: "Connect an inbox",
+              icon: Mails,
+              run: go("/inboxes"),
+            },
+          ]
+        : []),
+      {
+        key: "a:mode",
+        group: "Actions",
+        label:
+          resolvedMode === "dark"
+            ? "Switch to light mode"
+            : "Switch to dark mode",
+        meta: "Appearance",
+        icon: resolvedMode === "dark" ? Sun : Moon,
+        run: act(() => {
+          void setPreferences({
+            colorMode: resolvedMode === "dark" ? "light" : "dark",
+          });
+        }),
+      },
+      {
+        key: "a:keys",
+        group: "Actions",
+        label: "Keyboard shortcuts",
+        meta: "?",
+        icon: Keyboard,
+        run: act(() => shellStore.set({ keys: true })),
+      },
+    ];
     const term = q.trim().toLowerCase();
-    const matchedPages = term
-      ? pages.filter(
-          (p) =>
-            p.label.toLowerCase().includes(term) ||
-            (p.meta ?? "").toLowerCase().includes(term),
-        )
-      : pages;
+    const matches = (p: Entry) =>
+      p.label.toLowerCase().includes(term) ||
+      (p.meta ?? "").toLowerCase().includes(term);
+    const matchedPages = term ? pages.filter(matches) : pages;
+    const matchedActions = term ? actions.filter(matches) : actions;
     const peopleEntries: Entry[] = people.map((it) =>
       it.type === "person"
         ? {
@@ -146,8 +231,9 @@ function Palette_() {
             run: go(`/?q=${encodeURIComponent(q.trim())}`),
           },
     );
-    return [...peopleEntries, ...matchedPages];
-  }, [q, people, isAdmin, navigate]);
+    return [...peopleEntries, ...matchedActions, ...matchedPages];
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [q, people, isAdmin, navigate, onCompose, resolvedMode]);
 
   useEffect(() => setSel(0), [q, people]);
 
@@ -175,7 +261,7 @@ function Palette_() {
   }
 
   let idx = -1;
-  const groups: Array<Entry["group"]> = ["People", "Pages"];
+  const groups: Array<Entry["group"]> = ["People", "Actions", "Pages"];
 
   return (
     <>
@@ -193,7 +279,7 @@ function Palette_() {
             ref={inputRef}
             value={q}
             onChange={(e) => setQ(e.target.value)}
-            placeholder="Search people, or jump to a page…"
+            placeholder="Search people, run a command, or jump to a page…"
             aria-label="Search"
             role="combobox"
             aria-expanded="true"

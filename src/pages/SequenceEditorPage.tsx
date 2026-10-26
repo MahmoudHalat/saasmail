@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { useUnsavedGuard } from "@/hooks/useUnsavedGuard";
 import { useNavigate, useParams, Link } from "react-router-dom";
 import {
   ArrowLeft,
@@ -65,6 +66,14 @@ export default function SequenceEditorPage() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+  const [saved, setSaved] = useState(() =>
+    JSON.stringify({
+      name: "",
+      steps: [{ order: 1, templateSlug: "", delayHours: 0 }],
+    }),
+  );
+  const dirty = !loading && JSON.stringify({ name, steps }) !== saved;
+  const { confirmLeave, release } = useUnsavedGuard(dirty);
 
   useEffect(() => {
     let cancelled = false;
@@ -78,6 +87,7 @@ export default function SequenceEditorPage() {
           if (cancelled) return;
           setName(seq.name);
           setSteps(seq.steps);
+          setSaved(JSON.stringify({ name: seq.name, steps: seq.steps }));
         }
       } catch {
         if (!cancelled) setError("Failed to load sequence.");
@@ -125,6 +135,7 @@ export default function SequenceEditorPage() {
       } else {
         await createSequence({ name, steps });
       }
+      release();
       navigate("/sequences");
     } catch {
       setError("Failed to save sequence.");
@@ -173,7 +184,7 @@ export default function SequenceEditorPage() {
             <Button
               type="button"
               variant="outline"
-              onClick={() => navigate("/sequences")}
+              onClick={() => confirmLeave() && navigate("/sequences")}
             >
               Cancel
             </Button>

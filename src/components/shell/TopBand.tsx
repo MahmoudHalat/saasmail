@@ -68,7 +68,7 @@ export default function TopBand({
         aria-label="Search and jump to"
       >
         <Search size={15} />
-        <span>Search people and pages…</span>
+        <span>Search, or run a command…</span>
         <kbd>{isMac ? "⌘K" : "Ctrl K"}</kbd>
       </button>
       {webmcpEnabled && <WebMcpStatusBadge toolCount={WEBMCP_TOOL_COUNT} />}

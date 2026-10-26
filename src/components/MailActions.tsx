@@ -25,6 +25,15 @@ import {
 import { snoozePresets } from "@/hooks/useMailList";
 import { cn } from "@/lib/utils";
 
+/** Right-aligned shortcut letter inside a menu item. */
+function Kbd({ children }: { children: ReactNode }) {
+  return (
+    <span className="ml-auto pl-3 text-[11px] text-text-tertiary" aria-hidden>
+      {children}
+    </span>
+  );
+}
+
 /** Per-user mail state a row or thread header shows actions for. */
 export interface MailStateLike {
   starred: boolean;
@@ -96,6 +105,7 @@ export function SnoozeItems({
 /** Small square icon button used in row hover bars and thread headers. */
 export function IconAction({
   label,
+  shortcut,
   onClick,
   children,
   active,
@@ -103,6 +113,8 @@ export function IconAction({
   testId,
 }: {
   label: string;
+  /** Keyboard shortcut shown in the tooltip, e.g. "E". */
+  shortcut?: string;
   onClick?: (e: React.MouseEvent) => void;
   children: ReactNode;
   active?: boolean;
@@ -113,7 +125,8 @@ export function IconAction({
     <button
       type="button"
       aria-label={label}
-      title={label}
+      title={shortcut ? `${label} (${shortcut})` : label}
+      aria-keyshortcuts={shortcut?.toLowerCase()}
       data-testid={testId}
       aria-pressed={active}
       onClick={(e) => {
@@ -145,6 +158,7 @@ export function StarToggle({
   return (
     <IconAction
       label={starred ? "Unstar" : "Star"}
+      shortcut="S"
       active={starred}
       onClick={() => onToggle?.()}
       className={cn(starred && "text-star hover:text-star", className)}
@@ -175,6 +189,7 @@ export function MailActionButtons({
       {handlers.onArchive && (
         <IconAction
           label={archived ? "Move to inbox" : "Archive"}
+          shortcut="E"
           onClick={handlers.onArchive}
         >
           {archived ? <ArchiveRestore /> : <Archive />}
@@ -188,9 +203,10 @@ export function MailActionButtons({
               aria-label="Snooze"
               title={
                 state.snoozedUntil
-                  ? `Snoozed until ${snoozeLabel(state.snoozedUntil)}`
-                  : "Snooze"
+                  ? `Snoozed until ${snoozeLabel(state.snoozedUntil)} (B)`
+                  : "Snooze (B)"
               }
+              aria-keyshortcuts="b"
               onClick={(e) => e.stopPropagation()}
               className={cn(
                 "inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-text-secondary transition-colors hover:bg-bg-muted hover:text-text-primary data-[state=open]:bg-bg-muted [&_svg]:size-4",
@@ -212,6 +228,7 @@ export function MailActionButtons({
       {handlers.onTogglePin && (
         <IconAction
           label={state.pinned ? "Unpin" : "Pin to top"}
+          shortcut="P"
           active={state.pinned}
           onClick={handlers.onTogglePin}
           className={cn(state.pinned && "text-accent hover:text-accent")}
@@ -272,18 +289,21 @@ export function MailRowMenu({
           <DropdownMenuItem onSelect={handlers.onToggleStar}>
             <Star className={cn(state.starred && "fill-current text-star")} />
             {state.starred ? "Unstar" : "Star"}
+            <Kbd>S</Kbd>
           </DropdownMenuItem>
         )}
         {handlers.onTogglePin && (
           <DropdownMenuItem onSelect={handlers.onTogglePin}>
             {state.pinned ? <PinOff /> : <Pin />}
             {state.pinned ? "Unpin" : "Pin to top"}
+            <Kbd>P</Kbd>
           </DropdownMenuItem>
         )}
         {handlers.onArchive && (
           <DropdownMenuItem onSelect={handlers.onArchive}>
             {archived ? <ArchiveRestore /> : <Archive />}
             {archived ? "Move to inbox" : "Archive"}
+            <Kbd>E</Kbd>
           </DropdownMenuItem>
         )}
         {handlers.onSnooze && (
@@ -300,6 +320,7 @@ export function MailRowMenu({
         {handlers.onMarkRead && (
           <DropdownMenuItem onSelect={handlers.onMarkRead}>
             <CheckCheck /> Mark as read
+            <Kbd>⇧I</Kbd>
           </DropdownMenuItem>
         )}
         {handlers.onDelete && (

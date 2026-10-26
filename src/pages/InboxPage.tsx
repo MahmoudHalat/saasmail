@@ -55,6 +55,58 @@ import {
   folderFromParams,
 } from "@/components/shell/nav";
 import { refreshMailCounts } from "@/components/shell/useMailCounts";
+import SnoozeDialog from "@/components/SnoozeDialog";
+import { shouldIgnoreKey } from "@/lib/shortcuts";
+import { shellStore } from "@/components/shell/shellStore";
+
+const keyOf = (it: { type: string; id: string }) => `${it.type}:${it.id}`;
+
+/**
+ * "r": put the caret in the open conversation's reply box. Chat inboxes
+ * have a quick-reply field; thread inboxes open the reply composer on the
+ * latest message. Polls briefly because the conversation may still be
+ * loading.
+ */
+function focusReplyWhenReady(tries = 25) {
+  const pane = document.getElementById("pt-reading");
+  const quick = pane?.querySelector<HTMLTextAreaElement>("textarea");
+  if (quick && !quick.disabled) {
+    quick.focus();
+    return;
+  }
+  const editor = pane?.querySelector<HTMLElement>(
+    '[data-testid="reply-composer"] .ProseMirror',
+  );
+  if (editor) {
+    editor.focus();
+    return;
+  }
+  const last = Array.from(
+    pane?.querySelectorAll<HTMLElement>('[data-testid="thread-message"]') ?? [],
+  ).pop();
+  const btn = Array.from(last?.querySelectorAll("button") ?? []).find(
+    (b) => b.textContent?.trim() === "Reply",
+  );
+  if (btn) {
+    btn.click();
+    window.setTimeout(() => focusReplyWhenReady(10), 120);
+    return;
+  }
+  if (tries > 0) window.setTimeout(() => focusReplyWhenReady(tries - 1), 120);
+}
+
+/** The row button for a list key, for focus and scrolling. */
+function rowElement(key: string): HTMLElement | null {
+  const [type, id] = [
+    key.slice(0, key.indexOf(":")),
+    key.slice(key.indexOf(":") + 1),
+  ];
+  const sel =
+    type === "person"
+      ? `[data-testid="person-row"][data-person-id="${CSS.escape(id)}"]`
+      : `[data-testid="group-row"][data-conversation-id="${CSS.escape(id)}"]`;
+  return document.querySelector<HTMLElement>(sel);
+}
 
 type StatePatch = {
   starred?: boolean;
@@ -84,6 +136,24 @@ export default function InboxPage() {
   const [selectedConversation, setSelectedConversation] =
     useState<GroupedConversation | null>(null);
   const [items, setItems] = useState<GroupedItem[]>([]);
+  // Keyboard cursor: the row j/k last moved to (or the open one).
+  const [cursorKey, setCursorKey] = useState<string | null>(null);
+  const cursorKeyRef = useRef(cursorKey);
+  cursorKeyRef.current = cursorKey;
+  // The most recent undoable change, for the "z" shortcut.
+  const lastUndoRef = useRef<(() => void) | null>(null);
+  const [snoozeTargets, setSnoozeTargets] = useState<GroupedItem[] | null>(
+    null,
+  );
+  const openRow = useCallback((it: GroupedItem) => {
+    if (it.type === "person") {
+      setSelectedConversation(null);
+      setSelectedPerson(it);
+    } else {
+      setSelectedPerson(null);
+      setSelectedConversation(it);
+    }
+  }, []);
   const [peopleTotal, setPeopleTotal] = useState(0);
   const [peoplePage, setPeoplePage] = useState(1);
   const [peopleLoading, setPeopleLoading] = useState(true);
@@ -463,13 +533,38 @@ export default function InboxPage() {
       );
       if (removed.length > 0) {
         setPeopleTotal((t) => Math.max(0, t - removed.length));
-        if (selectedPerson && removedKeys.has(`person:${selectedPerson.id}`))
-          setSelectedPerson(null);
-        if (
-          selectedConversation &&
-          removedKeys.has(`group:${selectedConversation.id}`)
-        )
-          setSelectedConversation(null);
+        // The row that takes the removed row's place: the next one down,
+        // else the one above. Used to keep triage moving.
+        const neighbour = (k: string | null) => {
+          if (!k || !removedKeys.has(k)) return undefined;
+          const i = before.findIndex((it) => keyOf(it) === k);
+          const stays = (it: GroupedItem) => !removedKeys.has(keyOf(it));
+          return (
+            before.slice(i + 1).find(stays) ??
+            before.slice(0, Math.max(0, i)).reverse().find(stays) ??
+            null
+          );
+        };
+        const openK = selectedPerson
+          ? `person:${selectedPerson.id}`
+          : selectedConversation
+            ? `group:${selectedConversation.id}`
+            : null;
+        const nextOpen = neighbour(openK);
+        if (nextOpen !== undefined) {
+          // Desktop: open the next conversation (the list stays in view).
+          // Phone: go back to the list, where the user can see what's left.
+          if (nextOpen && !isNarrow) openRow(nextOpen);
+          else {
+            setSelectedPerson(null);
+            setSelectedConversation(null);
+          }
+          if (nextOpen) setCursorKey(keyOf(nextOpen));
+        } else {
+          const nextCursor = neighbour(cursorKeyRef.current);
+          if (nextCursor !== undefined)
+            setCursorKey(nextCursor ? keyOf(nextCursor) : null);
+        }
       } else {
         // Keep an open thread's header in step with the row.
         if (selectedPerson && keys.has(`person:${selectedPerson.id}`))
@@ -488,24 +583,32 @@ export default function InboxPage() {
         refreshMailCounts();
         // Pinned rows sort first in the inbox: refetch to reorder.
         if (patch.pinned !== undefined) refreshPeople();
+        const undo = opts.undo;
+        const runUndo = undo
+          ? () => {
+              lastUndoRef.current = null;
+              updateMailState(refs, undo)
+                .then(() => {
+                  refreshPeople();
+                  refreshMailCounts();
+                })
+                .catch(() =>
+                  showToast({ kind: "error", message: "Couldn't undo" }),
+                );
+            }
+          : null;
+        // "z" undoes the most recent change, toast or not.
+        lastUndoRef.current = runUndo;
         if (opts.message) {
-          const undo = opts.undo;
           showToast({
             kind: "success",
             message: opts.message,
-            action: undo
+            action: runUndo
               ? {
                   label: "Undo",
                   onClick: (dismiss) => {
                     dismiss();
-                    updateMailState(refs, undo)
-                      .then(() => {
-                        refreshPeople();
-                        refreshMailCounts();
-                      })
-                      .catch(() =>
-                        showToast({ kind: "error", message: "Couldn't undo" }),
-                      );
+                    runUndo();
                   },
                 }
               : undefined,
@@ -521,7 +624,7 @@ export default function InboxPage() {
       }
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [queryFolder, selectedPerson, selectedConversation],
+    [queryFolder, selectedPerson, selectedConversation, isNarrow],
   );
 
   const plural = (n: number, one: string) =>
@@ -529,8 +632,18 @@ export default function InboxPage() {
 
   const mailActionsFor = useCallback(
     (it: GroupedItem): MailActionHandlers => ({
-      onToggleStar: () => changeMailState([it], { starred: !it.starred }),
-      onTogglePin: () => changeMailState([it], { pinned: !it.pinned }),
+      onToggleStar: () =>
+        changeMailState(
+          [it],
+          { starred: !it.starred },
+          { undo: { starred: it.starred } },
+        ),
+      onTogglePin: () =>
+        changeMailState(
+          [it],
+          { pinned: !it.pinned },
+          { undo: { pinned: it.pinned } },
+        ),
       onArchive: () =>
         it.archivedAt
           ? changeMailState(
@@ -575,10 +688,14 @@ export default function InboxPage() {
   );
 
   function handleBulkArchive() {
-    const n = selectedItems.length;
+    archiveMany(selectedItems);
+  }
+
+  function archiveMany(list: GroupedItem[]) {
+    const n = list.length;
     if (folder === "archive") {
       changeMailState(
-        selectedItems,
+        list,
         { archived: false },
         {
           message: `${plural(n, "Conversation")} moved to inbox`,
@@ -587,7 +704,7 @@ export default function InboxPage() {
       );
     } else {
       changeMailState(
-        selectedItems,
+        list,
         { archived: true },
         {
           message: `${plural(n, "Conversation")} archived`,
@@ -599,9 +716,13 @@ export default function InboxPage() {
   }
 
   function handleBulkSnooze(until: number | null) {
-    const n = selectedItems.length;
+    snoozeMany(selectedItems, until);
+  }
+
+  function snoozeMany(list: GroupedItem[], until: number | null) {
+    const n = list.length;
     changeMailState(
-      selectedItems,
+      list,
       { snoozedUntil: until },
       until
         ? {
@@ -770,6 +891,114 @@ export default function InboxPage() {
   const openState: MailStateLike | undefined = openItem ?? undefined;
   const openActions = openItem ? mailActionsFor(openItem) : undefined;
 
+  // ── Keyboard triage (default layout) ───────────────────────────────
+  // The handler is rebuilt every render (it reads the latest list, the
+  // open row and the selection); one document listener calls the latest.
+  const openKey = openItem ? keyOf(openItem) : null;
+  useEffect(() => {
+    if (openKey) setCursorKey(openKey);
+  }, [openKey]);
+
+  const keyHandler = useRef<(e: KeyboardEvent) => void>(() => {});
+  keyHandler.current = (e: KeyboardEvent) => {
+    if (shouldIgnoreKey(e) || agentPlanOpen) return;
+    const shell = shellStore.get();
+    if (shell.cmdk || shell.keys || snoozeTargets) return;
+
+    const curIdx = items.findIndex(
+      (it) => keyOf(it) === (openKey ?? cursorKey),
+    );
+    const cursorItem = curIdx >= 0 ? items[curIdx] : null;
+    // What an action applies to: the open conversation, else the
+    // checked rows, else the row under the cursor.
+    const targets: GroupedItem[] = openItem
+      ? [openItem]
+      : selectedItems.length > 0
+        ? selectedItems
+        : cursorItem
+          ? [cursorItem]
+          : [];
+
+    const move = (delta: number) => {
+      if (items.length === 0) return;
+      const next =
+        curIdx === -1
+          ? delta > 0
+            ? 0
+            : items.length - 1
+          : Math.min(items.length - 1, Math.max(0, curIdx + delta));
+      const it = items[next];
+      setCursorKey(keyOf(it));
+      if (openItem && view === "list") openRow(it);
+      requestAnimationFrame(() => {
+        const el = rowElement(keyOf(it));
+        el?.focus({ preventScroll: true });
+        el?.scrollIntoView({ block: "nearest" });
+      });
+    };
+
+    const k = e.key;
+    let handled = true;
+    // Table view has its own row layout: list shortcuts apply only to
+    // the list (or to a conversation opened from either).
+    if (view === "table" && !openItem && ["j", "k", "x", "o"].includes(k))
+      return;
+    if (k === "j" || k === "ArrowDown") move(1);
+    else if (k === "k" || k === "ArrowUp") move(-1);
+    else if ((k === "Enter" || k === "o") && cursorItem && !openItem) {
+      // Enter on a focused row button already clicks it.
+      if (k === "Enter" && document.activeElement?.closest("button")) return;
+      openRow(cursorItem);
+    } else if (k === "Escape" || k === "u") {
+      if (openItem) {
+        const key = keyOf(openItem);
+        setSelectedPerson(null);
+        setSelectedConversation(null);
+        requestAnimationFrame(() => rowElement(key)?.focus());
+      } else if (selectionCount > 0) clearSelection();
+      else handled = false;
+    } else if (k === "x" && cursorItem && !openItem) {
+      if (cursorItem.type === "person") toggleSelected(cursorItem.id);
+      else toggleSelectedConversation(cursorItem.id);
+    } else if (k === "z") {
+      if (lastUndoRef.current) {
+        lastUndoRef.current();
+        showToast({ kind: "info", message: "Undone" });
+      } else showToast({ kind: "info", message: "Nothing to undo" });
+    } else if (targets.length === 0) {
+      handled = false;
+    } else if (k === "e") {
+      if (targets.length === 1) mailActionsFor(targets[0]).onArchive?.();
+      else archiveMany(targets);
+    } else if (k === "s") {
+      if (targets.length === 1) mailActionsFor(targets[0]).onToggleStar?.();
+      else {
+        changeMailState(targets, {
+          starred: !targets.every((it) => it.starred),
+        });
+        clearSelection();
+      }
+    } else if (k === "p" && targets.length === 1) {
+      mailActionsFor(targets[0]).onTogglePin?.();
+    } else if (k === "b") {
+      setSnoozeTargets(targets);
+    } else if (k === "I") {
+      applyMarkRead(
+        targets.filter((t) => t.type === "person").map((t) => t.id),
+        targets.filter((t) => t.type === "group").map((t) => t.id),
+      );
+    } else if (k === "r" && targets.length === 1) {
+      if (!openItem) openRow(targets[0]);
+      focusReplyWhenReady();
+    } else handled = false;
+    if (handled) e.preventDefault();
+  };
+  useEffect(() => {
+    const on = (e: KeyboardEvent) => keyHandler.current(e);
+    document.addEventListener("keydown", on);
+    return () => document.removeEventListener("keydown", on);
+  }, []);
+
   if (stats && stats.recipients.length === 0 && !isAdmin) {
     return (
       <div className="pt-page flex flex-1 items-center justify-center">
@@ -835,7 +1064,25 @@ export default function InboxPage() {
       // Lets the shell hide the mobile Compose button while a thread (with
       // its own reply bar) is open — see .compose-fab in src/index.css.
       data-thread-open={selectedPerson || selectedConversation ? "" : undefined}
+      data-selecting={selectionCount > 0 ? "" : undefined}
     >
+      <SnoozeDialog
+        open={!!snoozeTargets}
+        onClose={() => setSnoozeTargets(null)}
+        subject={
+          snoozeTargets && snoozeTargets.length === 1
+            ? snoozeTargets[0].type === "person"
+              ? snoozeTargets[0].name || snoozeTargets[0].email
+              : "This conversation"
+            : `${snoozeTargets?.length ?? 0} conversations`
+        }
+        snoozed={!!snoozeTargets?.some((t) => t.snoozedUntil)}
+        onPick={(until) => {
+          const list = snoozeTargets ?? [];
+          if (list.length === 1) mailActionsFor(list[0]).onSnooze?.(until);
+          else snoozeMany(list, until);
+        }}
+      />
       {/* Header + filters. Hidden while a thread is open in table view, and
           on phones while a thread is open (the thread has its own header). */}
       {!(view === "table" && (selectedPerson || selectedConversation)) && (
@@ -890,11 +1137,11 @@ export default function InboxPage() {
           <AgentPlan />
         ) : view === "table" ? (
           selectedConversation ? (
-            <div className="flex h-full min-h-0 flex-col">
+            <div id="pt-reading" className="flex h-full min-h-0 flex-col">
               {renderConversation(() => setSelectedConversation(null))}
             </div>
           ) : selectedPerson ? (
-            <div className="flex h-full min-h-0 flex-col">
+            <div id="pt-reading" className="flex h-full min-h-0 flex-col">
               {renderPerson(() => setSelectedPerson(null))}
             </div>
           ) : (
@@ -996,6 +1243,7 @@ export default function InboxPage() {
             </div>
 
             <div
+              id="pt-reading"
               className={cn(
                 "min-w-0 flex-1 bg-bg-subtle",
                 selectedPerson || selectedConversation
@@ -1026,10 +1274,43 @@ export default function InboxPage() {
                   <span className="ic">
                     <Mail size={18} />
                   </span>
+                  {aggregates.unreadRowCount > 0 && (
+                    <p className="text-[15px] font-semibold text-text-primary">
+                      {aggregates.unreadRowCount.toLocaleString()} unread{" "}
+                      {aggregates.unreadRowCount === 1
+                        ? "conversation"
+                        : "conversations"}
+                    </p>
+                  )}
                   <p>
                     Select a person to view emails, or switch to Table view for
                     an overview.
                   </p>
+                  <ul className="pt-empty-keys" aria-label="Shortcuts">
+                    <li>
+                      <kbd>j</kbd>
+                      <kbd>k</kbd> move
+                    </li>
+                    <li>
+                      <kbd>e</kbd> archive
+                    </li>
+                    <li>
+                      <kbd>b</kbd> snooze
+                    </li>
+                    <li>
+                      <kbd>r</kbd> reply
+                    </li>
+                    <li>
+                      <kbd>c</kbd> new message
+                    </li>
+                  </ul>
+                  <button
+                    type="button"
+                    className="text-[13px] font-medium text-accent-subtle-fg hover:underline"
+                    onClick={() => shellStore.set({ keys: true })}
+                  >
+                    All keyboard shortcuts <kbd className="ml-1">?</kbd>
+                  </button>
                 </div>
               )}
             </div>
