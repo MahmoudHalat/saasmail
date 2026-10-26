@@ -88,15 +88,21 @@ export function GmMenu({
   align = "start",
   side,
   modal,
+  open,
+  onOpenChange,
+  testId,
 }: {
   trigger: ReactNode;
   children: ReactNode;
   align?: "start" | "end" | "center";
   side?: "top" | "bottom" | "left" | "right";
   modal?: boolean;
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
+  testId?: string;
 }) {
   return (
-    <Menu.Root modal={modal}>
+    <Menu.Root modal={modal} open={open} onOpenChange={onOpenChange}>
       <Menu.Trigger asChild>{trigger}</Menu.Trigger>
       <Menu.Portal>
         <Menu.Content
@@ -105,6 +111,7 @@ export function GmMenu({
           side={side}
           sideOffset={4}
           collisionPadding={8}
+          data-testid={testId}
         >
           {children}
         </Menu.Content>
@@ -358,7 +365,7 @@ export function ShortcutsDialog({
     <Dialog.Root open={open} onOpenChange={(v) => !v && onClose()}>
       <Dialog.Portal>
         <Dialog.Overlay className="gm-scrim" style={{ zIndex: 79 }} />
-        <Dialog.Content className="gm-dialog w-[560px] p-6">
+        <Dialog.Content className="gm-dialog w-[760px] p-6">
           <div className="mb-4 flex items-center justify-between">
             <Dialog.Title className="text-[22px] font-normal">
               Keyboard shortcuts
@@ -370,19 +377,28 @@ export function ShortcutsDialog({
           <Dialog.Description className="sr-only">
             Single-key shortcuts available in the mail list and conversation.
           </Dialog.Description>
-          <dl className="grid grid-cols-1 gap-x-8 gap-y-2 sm:grid-cols-2">
-            {SHORTCUT_HELP.map((s) => (
-              <div
-                key={s.keys}
-                className="flex items-center justify-between gap-4 text-sm"
-              >
-                <dt className="text-text-secondary">{s.label}</dt>
-                <dd>
-                  <kbd className="gm-kbd">{s.keys}</kbd>
-                </dd>
-              </div>
+          <div className="grid grid-cols-1 gap-x-10 gap-y-6 md:grid-cols-2">
+            {SHORTCUT_HELP.map((g) => (
+              <section key={g.group}>
+                <h3 className="mb-2 text-sm font-medium text-text-primary">
+                  {g.group}
+                </h3>
+                <dl className="space-y-1.5">
+                  {g.items.map((s) => (
+                    <div
+                      key={s.keys}
+                      className="flex items-center justify-between gap-4 text-sm"
+                    >
+                      <dt className="text-text-secondary">{s.label}</dt>
+                      <dd className="flex-none">
+                        <kbd className="gm-kbd">{s.keys}</kbd>
+                      </dd>
+                    </div>
+                  ))}
+                </dl>
+              </section>
             ))}
-          </dl>
+          </div>
         </Dialog.Content>
       </Dialog.Portal>
     </Dialog.Root>

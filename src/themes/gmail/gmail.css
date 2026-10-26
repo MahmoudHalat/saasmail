@@ -689,3 +689,213 @@ kbd.gm-kbd {
   flex: 1 1 0;
   min-width: 0;
 }
+
+/* ── Pass 2: tabs, chips, drag and drop, context bits ───────────── */
+
+:root[data-ui="gmail"] {
+  --gm-cat-primary: var(--sm-accent);
+  --gm-cat-promotions: #188038;
+  --gm-cat-social: #1a73e8;
+  --gm-cat-updates: #e37400;
+  --gm-cat-on: #ffffff;
+  --gm-swipe-delete: #d93025;
+  --gm-swipe-read: #1a73e8;
+  --gm-swipe-snooze: #e37400;
+  --gm-drop: var(--sm-accent-tint);
+}
+:root[data-ui="gmail"][data-mode="dark"] {
+  --gm-cat-promotions: #81c995;
+  --gm-cat-social: #8ab4f8;
+  --gm-cat-updates: #fdd663;
+  --gm-cat-on: #202124;
+  --gm-swipe-delete: #c5221f;
+  --gm-swipe-read: #1967d2;
+  --gm-swipe-snooze: #b06000;
+}
+
+/* Inbox tabs */
+.gm-tab {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex: 0 1 250px;
+  min-width: 0;
+  padding: 0 16px;
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--sm-muted);
+  transition: background-color 0.1s;
+}
+.gm-tab:hover {
+  background: var(--chrome-hover);
+}
+.gm-tab::after {
+  content: "";
+  position: absolute;
+  left: 8px;
+  right: 8px;
+  bottom: 0;
+  height: 3px;
+  border-radius: 3px 3px 0 0;
+  background: transparent;
+}
+.gm-tab[data-active="true"] {
+  color: var(--gm-cat-color);
+}
+.gm-tab[data-active="true"]::after {
+  background: var(--gm-cat-color);
+}
+.gm-tab .gm-tab-icon {
+  flex: none;
+}
+.gm-tab[data-active="true"] .gm-tab-icon {
+  color: var(--gm-cat-color);
+}
+.gm-tab,
+.gm-m-cat {
+  --gm-cat-color: var(--gm-cat-primary);
+}
+[data-cat="promotions"] {
+  --gm-cat-color: var(--gm-cat-promotions);
+}
+[data-cat="social"] {
+  --gm-cat-color: var(--gm-cat-social);
+}
+[data-cat="updates"] {
+  --gm-cat-color: var(--gm-cat-updates);
+}
+.gm-tab-badge {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  height: 20px;
+  padding: 0 8px;
+  border-radius: 10px;
+  background: var(--gm-cat-color);
+  color: var(--gm-cat-on);
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+/* Mobile category rows */
+.gm-m-cat {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  width: 100%;
+  padding: 10px 16px;
+  color: var(--sm-ink);
+}
+.gm-m-cat-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  border-radius: 9999px;
+  color: var(--gm-cat-color);
+}
+
+/* Filter chips (search chips, mobile search) */
+.gm-filter-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+  height: 32px;
+  padding: 0 12px;
+  border: 1px solid var(--sm-line-2);
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--sm-muted);
+  background: transparent;
+  white-space: nowrap;
+}
+.gm-filter-chip:hover {
+  background: var(--chrome-hover);
+}
+.gm-filter-chip[data-active="true"] {
+  border-color: transparent;
+  background: var(--sm-accent-tint);
+  color: var(--sm-accent-ink);
+}
+
+/* Drag handle on rows, drag ghost, drop targets */
+.gm-grip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 12px;
+  flex: none;
+  color: var(--sm-faint);
+  opacity: 0;
+  cursor: grab;
+}
+.gm-row:hover .gm-grip {
+  opacity: 1;
+}
+.gm-drag-ghost {
+  padding: 8px 16px;
+  border-radius: 8px;
+  background: var(--sm-accent);
+  color: var(--sm-on-accent);
+  font: 500 14px var(--sm-font-sans);
+  box-shadow: var(--sm-sh-md);
+}
+.gm-nav-item[data-drop-over="true"] {
+  background: var(--gm-drop);
+  outline: 2px dashed var(--sm-accent);
+  outline-offset: -2px;
+}
+.gm-row[data-dragging="true"] {
+  opacity: 0.5;
+}
+
+/* Swipe backgrounds per action */
+.gm-m-swipe-bg[data-action="delete"] {
+  background: var(--gm-swipe-delete);
+}
+.gm-m-swipe-bg[data-action="read"] {
+  background: var(--gm-swipe-read);
+}
+.gm-m-swipe-bg[data-action="snooze"] {
+  background: var(--gm-swipe-snooze);
+}
+.gm-m-swipe-bg[data-action="none"] {
+  background: var(--sm-surface-3);
+}
+
+/* Message cursor (n / p) */
+[data-testid="gmail-message"][data-cursor="true"],
+[data-testid="gmail-message-collapsed"][data-cursor="true"] {
+  box-shadow: inset 3px 0 0 var(--sm-accent);
+}
+
+.gm-inline-editor .notion-editor-content {
+  min-height: 120px;
+}
+
+.gm-side-drawer-full {
+  width: 100vw;
+}
+
+/* List section headers (Unread first / Starred first) */
+.gm-section-head {
+  display: flex;
+  align-items: center;
+  height: 40px;
+  padding: 0 16px;
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--sm-ink);
+  background: var(--sm-surface);
+  border-bottom: 1px solid var(--sm-line);
+}
+
+.gm-offline {
+  background: var(--sm-warn-bg);
+  color: var(--sm-warn);
+}

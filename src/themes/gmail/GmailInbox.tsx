@@ -6,7 +6,7 @@ import {
   useParams,
   useSearchParams,
 } from "react-router-dom";
-import { RotateCw } from "lucide-react";
+import { RotateCw, WifiOff } from "lucide-react";
 import {
   EMPTY_MAIL_ROW_STATE,
   fetchConversationEmails,
@@ -15,8 +15,9 @@ import {
   markEmailRead,
   type Email,
   type GroupedItem,
+  type MailCategory,
 } from "@/lib/api";
-import { itemKey, MAIL_PAGE_SIZE, useMailList } from "@/hooks/useMailList";
+import { itemKey, itemTitle } from "@/hooks/useMailList";
 import { usePullToRefresh } from "@/hooks/usePullToRefresh";
 import { useSession } from "@/lib/auth-client";
 import { useBranding } from "@/lib/branding";
@@ -27,21 +28,33 @@ import { cn } from "@/lib/utils";
 import "./gmail.css";
 import {
   buildListSearch,
+  CATEGORY_LABELS,
   FOLDER_LABELS,
   folderQuery,
+  isSearch,
   isTypingTarget,
   labelName,
   openParam,
   parseListState,
   parseOpen,
   rangeLabel,
-  shortcutFor,
+  resolveShortcut,
+  stateToQuery,
+  withinRange,
+  type ListState,
+  type ShortcutPrefix,
 } from "./lib";
-import { useGmailShell, useGmailView, useIsMobile } from "./state";
-import type { ConversationHandle, RowActions } from "./actions";
+import { useGmailShell, useGmailView, useIsMobile, useOnline } from "./state";
 import {
+  senderEmail,
+  type ConversationHandle,
+  type RowActions,
+} from "./actions";
+import {
+  CategoryTabs,
   ListToolbar,
   MailRow,
+  SelectAllBanner,
   SkeletonRows,
   type SelectPreset,
 } from "./DesktopList";
@@ -53,9 +66,22 @@ import {
   MobileSkeleton,
   PullIndicator,
 } from "./MobileList";
+import { CategoryRows, MobileSearchScreen } from "./MobileSearch";
 import Conversation from "./Conversation";
 import { EmptyState } from "./Empty";
 import { ConfirmDialog, PickDateDialog } from "./ui";
+import { labelsFrom } from "./Nav";
+import { SearchChips } from "./Search";
+import { RowMenu, type RowMenuState } from "./RowMenu";
+import { PAGE_SIZE, useGmailList } from "./useGmailList";
+import {
+  DRAG_MIME,
+  dragGhost,
+  endRowDrag,
+  onRowDrop,
+  startRowDrag,
+} from "./dnd";
+import type { InlineMode } from "./InlineComposer";
 
 type Patch = Partial<
   Pick<
@@ -87,15 +113,24 @@ async function latestReceivedId(item: GroupedItem): Promise<string | null> {
   return received[0]?.id ?? null;
 }
 
+const ACTIONS: InlineMode[] = ["reply", "replyAll", "forward"];
+
 export default function GmailInbox() {
   const { onCompose } = useOutletContext<{
     onCompose: (prefill?: ComposePrefill) => void;
   }>();
   const shell = useGmailShell();
-  const { setInboxMounted, reportStats, focusSearch, openShortcuts } = shell;
+  const {
+    setInboxMounted,
+    reportStats,
+    focusSearch,
+    openShortcuts,
+    refreshCounts,
+  } = shell;
   const isMobile = useIsMobile();
   const view = useGmailView();
   const prefs = usePreferences();
+  const online = useOnline();
   const { data: session } = useSession();
   const { brandName } = useBranding();
   const [params] = useSearchParams();
@@ -104,20 +139,30 @@ export default function GmailInbox() {
   const routeParams = useParams<{ inbox?: string; personId?: string }>();
 
   const state = parseListState(params);
-  const fq = folderQuery(state);
-  const serverQ = state.q || state.from;
-  const clientFrom = state.q && state.from ? state.from.toLowerCase() : "";
-  const list = useMailList({
+  const searching = isSearch(state);
+  const tabsOn = view.tabs;
+  const fq = folderQuery(state, tabsOn);
+  const showTabs =
+    tabsOn && state.folder === "inbox" && !state.label && !searching;
+  const activeTab: MailCategory = state.tab ?? "primary";
+  const inboxType =
+    state.folder === "inbox" && !searching ? view.inboxType : "default";
+
+  const list = useGmailList({
     folder: fq.folder,
     recipient: state.label ?? undefined,
-    q: serverQ || undefined,
+    q: state.q || undefined,
     unread: state.unread || undefined,
     drafts: fq.drafts,
     sequenced: fq.sequenced,
+    hasAttachment: state.attachment || undefined,
+    from: state.from || undefined,
+    category: fq.category,
+    sort: inboxType === "unread" ? "unread" : undefined,
   });
-  const queryKey = `${fq.folder}|${state.label}|${serverQ}|${state.unread}|${fq.drafts}|${fq.sequenced}|${state.attachment}|${clientFrom}`;
+  const queryKey = JSON.stringify([fq, state, inboxType]);
 
-  const pane = !isMobile && view.readingPane === "right";
+  const pane = isMobile ? "none" : view.readingPane;
   const density = prefs.density === "compact" ? "compact" : view.density;
 
   /* ── shell wiring ── */
@@ -128,8 +173,19 @@ export default function GmailInbox() {
   useEffect(() => {
     if (list.stats) reportStats(list.stats);
   }, [list.stats, reportStats]);
+  useEffect(() => {
+    if (list.lastLoaded) refreshCounts();
+  }, [list.lastLoaded, refreshCounts]);
   const stats = list.stats ?? shell.stats;
   const identities = stats?.senderIdentities ?? [];
+  const labels = useMemo(() => labelsFrom(stats), [stats]);
+
+  // Back online: reload.
+  const wasOnline = useRef(online);
+  useEffect(() => {
+    if (online && !wasOnline.current) list.refresh();
+    wasOnline.current = online;
+  }, [online, list]);
 
   /* ── mobile infinite scroll: earlier pages kept here ── */
   const [earlier, setEarlier] = useState<GroupedItem[]>([]);
@@ -138,21 +194,19 @@ export default function GmailInbox() {
   }, [queryKey]);
 
   const filterClient = useCallback(
-    (its: GroupedItem[]) =>
-      its.filter((it) => {
-        if (state.attachment && !(it.hasAttachment > 0)) return false;
-        if (clientFrom) {
-          const hay =
-            it.type === "person"
-              ? `${it.name ?? ""} ${it.email}`
-              : it.participants
-                  .map((p) => `${p.name ?? ""} ${p.email}`)
-                  .join(" ");
-          if (!hay.toLowerCase().includes(clientFrom)) return false;
-        }
+    (its: GroupedItem[]) => {
+      const { after, before } = withinRange(state.within);
+      const out = its.filter((it) => {
+        if (state.read && it.unreadCount > 0) return false;
+        if (after !== null && it.lastEmailAt < after) return false;
+        if (before !== null && it.lastEmailAt > before) return false;
         return true;
-      }),
-    [state.attachment, clientFrom],
+      });
+      if (inboxType === "starred")
+        return [...out].sort((a, b) => Number(b.starred) - Number(a.starred));
+      return out;
+    },
+    [state.read, state.within, inboxType],
   );
 
   const displayed = useMemo(
@@ -168,6 +222,8 @@ export default function GmailInbox() {
       ? { type: "person" as const, id: routeParams.personId }
       : null);
   const openKey = openRef ? `${openRef.type}:${openRef.id}` : null;
+  const doParam = params.get("do") as InlineMode | null;
+  const initialAction = doParam && ACTIONS.includes(doParam) ? doParam : null;
   const fromList = openKey
     ? (displayed.find((it) => itemKey(it) === openKey) ??
       list.items.find((it) => itemKey(it) === openKey) ??
@@ -236,21 +292,45 @@ export default function GmailInbox() {
     fromList ?? (fallback && itemKey(fallback) === openKey ? fallback : null);
 
   const listUrl = useCallback(
-    (extra?: { open?: string }) => {
+    (extra?: { open?: string; do?: string }) => {
       const base = buildListSearch(state);
       if (!extra?.open) return `/${base}`;
       const p = new URLSearchParams(base);
       p.set("open", extra.open);
+      if (extra.do) p.set("do", extra.do);
       return `/?${p.toString()}`;
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [params.toString()],
   );
 
+  /* ── selection & keyboard cursor ── */
+  const [selectedKeys, setSelectedKeys] = useState<Set<string>>(new Set());
+  const [allItems, setAllItems] = useState<GroupedItem[] | null>(null);
+  const [allLoading, setAllLoading] = useState(false);
+  const [focusedKey, setFocusedKey] = useState<string | null>(null);
+  // The row cursor only shows once the keyboard is used, like Gmail.
+  const [kbdNav, setKbdNav] = useState(false);
+  const anchorRef = useRef<number | null>(null);
+  useEffect(() => {
+    setSelectedKeys(new Set());
+    setAllItems(null);
+    anchorRef.current = null;
+  }, [queryKey, list.page]);
+  const pageSelected = displayed.filter((it) => selectedKeys.has(itemKey(it)));
+  const selected = allItems ?? pageSelected;
+  const focusedIndex = Math.max(
+    0,
+    displayed.findIndex((it) => itemKey(it) === focusedKey),
+  );
+  const focused = displayed[focusedIndex] ?? null;
+
   const open = useCallback(
-    (item: GroupedItem, opts?: { replace?: boolean }) => {
+    (item: GroupedItem, opts?: { replace?: boolean; action?: InlineMode }) => {
       setFocusedKey(itemKey(item));
-      navigate(listUrl({ open: openParam(item) }), { replace: opts?.replace });
+      navigate(listUrl({ open: openParam(item), do: opts?.action }), {
+        replace: opts?.replace,
+      });
     },
     [navigate, listUrl],
   );
@@ -258,25 +338,31 @@ export default function GmailInbox() {
     navigate(listUrl());
   }, [navigate, listUrl]);
 
-  /* ── selection & keyboard cursor ── */
-  const [selectedKeys, setSelectedKeys] = useState<Set<string>>(new Set());
-  const [focusedKey, setFocusedKey] = useState<string | null>(null);
-  // The row cursor only shows once the keyboard is used, like Gmail.
-  const [kbdNav, setKbdNav] = useState(false);
-  const anchorRef = useRef<number | null>(null);
+  // Returning to the list puts focus back on the row you came from.
+  const lastOpen = useRef<string | null>(null);
   useEffect(() => {
-    setSelectedKeys(new Set());
-    anchorRef.current = null;
-  }, [queryKey, list.page]);
-  const selected = displayed.filter((it) => selectedKeys.has(itemKey(it)));
-  const focusedIndex = Math.max(
-    0,
-    displayed.findIndex((it) => itemKey(it) === focusedKey),
-  );
-  const focused = displayed[focusedIndex] ?? null;
+    if (openKey) {
+      lastOpen.current = openKey;
+      return;
+    }
+    const k = lastOpen.current;
+    if (!k || isMobile) return;
+    lastOpen.current = null;
+    requestAnimationFrame(() => {
+      const el = document.querySelector<HTMLElement>(
+        `[data-key="${CSS.escape(k)}"]`,
+      );
+      if (el) {
+        setFocusedKey(k);
+        el.focus({ preventScroll: true });
+        el.scrollIntoView({ block: "nearest" });
+      }
+    });
+  }, [openKey, isMobile]);
 
   const toggleSelect = useCallback(
     (item: GroupedItem, range = false) => {
+      setAllItems(null);
       const idx = displayed.findIndex((it) => itemKey(it) === itemKey(item));
       setSelectedKeys((prev) => {
         const next = new Set(prev);
@@ -298,26 +384,35 @@ export default function GmailInbox() {
     [displayed],
   );
 
-  const selectPreset = (p: SelectPreset) => {
-    const pick = (f: (it: GroupedItem) => boolean) =>
-      setSelectedKeys(new Set(displayed.filter(f).map(itemKey)));
-    switch (p) {
-      case "all":
-        return pick(() => true);
-      case "none":
-        return setSelectedKeys(new Set());
-      case "read":
-        return pick((it) => it.unreadCount === 0);
-      case "unread":
-        return pick((it) => it.unreadCount > 0);
-      case "starred":
-        return pick((it) => it.starred);
-      case "unstarred":
-        return pick((it) => !it.starred);
-    }
+  const selectPreset = useCallback(
+    (p: SelectPreset) => {
+      setAllItems(null);
+      const pick = (f: (it: GroupedItem) => boolean) =>
+        setSelectedKeys(new Set(displayed.filter(f).map(itemKey)));
+      switch (p) {
+        case "all":
+          return pick(() => true);
+        case "none":
+          return setSelectedKeys(new Set());
+        case "read":
+          return pick((it) => it.unreadCount === 0);
+        case "unread":
+          return pick((it) => it.unreadCount > 0);
+        case "starred":
+          return pick((it) => it.starred);
+        case "unstarred":
+          return pick((it) => !it.starred);
+      }
+    },
+    [displayed],
+  );
+
+  const clearSelection = () => {
+    setSelectedKeys(new Set());
+    setAllItems(null);
   };
 
-  /* ── dialogs ── */
+  /* ── dialogs & menus ── */
   const [confirm, setConfirm] = useState<{
     items: GroupedItem[];
     after?: () => void;
@@ -327,6 +422,8 @@ export default function GmailInbox() {
     presets: boolean;
     after?: () => void;
   } | null>(null);
+  const [menu, setMenu] = useState<RowMenuState | null>(null);
+  const [searchOpen, setSearchOpen] = useState(false);
 
   /* ── actions ── */
   const patchLocal = (targets: GroupedItem[], patch: Patch | "remove") => {
@@ -349,47 +446,52 @@ export default function GmailInbox() {
         keys.forEach((k) => next.delete(k));
         return next;
       });
+      setAllItems(null);
     }
   };
 
-  const leavesView = (patch: { archived?: boolean; snoozed?: boolean }) => {
-    if (state.folder === "inbox") return true;
-    if (state.folder === "archive" && patch.archived === false) return true;
-    if (state.folder === "snoozed" && patch.snoozed === false) return true;
-    return false;
-  };
+  const leavesInbox = state.folder === "inbox";
 
   const leaveIfOpen = (targets: GroupedItem[]) => {
-    if (!openKey) return;
+    if (!openKey || pane !== "none") return;
     if (targets.some((t) => itemKey(t) === openKey)) back();
   };
 
+  const folderWhere = searching
+    ? "this search"
+    : state.label
+      ? labelName(
+          state.label,
+          identities.find((s) => s.email === state.label)?.displayName,
+        )
+      : showTabs
+        ? CATEGORY_LABELS[activeTab]
+        : FOLDER_LABELS[state.folder];
+
+  const doArchive = (its: GroupedItem[], verb?: string) => {
+    void list.actions.archive(its, verb);
+    patchLocal(
+      its,
+      leavesInbox ? "remove" : { archivedAt: Math.floor(Date.now() / 1000) },
+    );
+    leaveIfOpen(its);
+  };
+
   const act: RowActions = {
-    archive: (its) => {
-      void list.actions.archive(its);
-      patchLocal(
-        its,
-        leavesView({ archived: true })
-          ? "remove"
-          : { archivedAt: Math.floor(Date.now() / 1000) },
-      );
-      leaveIfOpen(its);
-    },
+    archive: (its) => doArchive(its),
+    mute: (its) => doArchive(its, "muted"),
     moveToInbox: (its) => {
       const archived = its.filter((i) => i.archivedAt);
       const snoozed = its.filter((i) => i.snoozedUntil);
       if (archived.length) void list.actions.unarchive(archived);
       if (snoozed.length) void list.actions.unsnooze(snoozed);
-      if (!archived.length && !snoozed.length && state.folder === "archive")
-        void list.actions.unarchive(its);
+      if (!archived.length && !snoozed.length) void list.actions.unarchive(its);
+      const leaves = state.folder === "archive" || state.folder === "snoozed";
       patchLocal(
         its,
-        state.folder === "archive" || state.folder === "snoozed"
-          ? "remove"
-          : { archivedAt: null, snoozedUntil: null },
+        leaves ? "remove" : { archivedAt: null, snoozedUntil: null },
       );
-      if (state.folder === "archive" || state.folder === "snoozed")
-        leaveIfOpen(its);
+      if (leaves) leaveIfOpen(its);
     },
     requestDelete: (its, after) => {
       if (!its.some((i) => i.type === "person")) {
@@ -407,6 +509,7 @@ export default function GmailInbox() {
       if (!unread.length) return;
       void list.actions.markRead(unread);
       patchLocal(unread, { unreadCount: 0 });
+      list.setUndo(() => void act.markUnread(unread));
     },
     markUnread: async (its) => {
       try {
@@ -417,12 +520,23 @@ export default function GmailInbox() {
             .map((id) => markEmailRead(id, false)),
         );
         patchLocal(its, { unreadCount: 1 });
+        list.setUndo(() => {
+          void list.actions.markRead(its, { quiet: true });
+          patchLocal(its, { unreadCount: 0 });
+        });
         showToast({
           kind: "info",
           message:
             its.length === 1
               ? "Conversation marked as unread"
               : `${its.length} conversations marked as unread`,
+          action: {
+            label: "Undo",
+            onClick: (dismiss) => {
+              dismiss();
+              list.undoLast();
+            },
+          },
         });
         list.refresh();
       } catch (e) {
@@ -436,12 +550,11 @@ export default function GmailInbox() {
       void list.actions.snooze(its, until);
       patchLocal(
         its,
-        leavesView({ snoozed: true }) ? "remove" : { snoozedUntil: until },
+        state.folder === "inbox" ? "remove" : { snoozedUntil: until },
       );
       leaveIfOpen(its);
     },
-    pickSnooze: (its, after) =>
-      setPick({ items: its, presets: isMobile, after }),
+    pickSnooze: (its, after) => setPick({ items: its, presets: true, after }),
     star: (its, value) => {
       const v = value ?? !its.every((t) => t.starred);
       void list.actions.toggleStar(its, v);
@@ -454,16 +567,65 @@ export default function GmailInbox() {
       const v = value ?? !its.every((t) => t.pinned);
       void list.actions.togglePin(its, v);
       patchLocal(its, { pinned: v });
-      showToast({
-        kind: "info",
-        message: v
-          ? its.length === 1
-            ? "Pinned to the top of your inbox"
-            : `${its.length} conversations pinned`
-          : "Unpinned",
-      });
     },
+    respond: (item, how) => open(item, { action: how }),
+    findFrom: (item) =>
+      navigate(
+        `/${buildListSearch({ folder: "all", from: senderEmail(item) })}`,
+      ),
+    openInNewWindow: (item) =>
+      window.open(
+        `/?open=${encodeURIComponent(openParam(item))}`,
+        "_blank",
+        "noopener",
+      ),
+    showLabel: (address) =>
+      navigate(`/${buildListSearch({ folder: "all", label: address })}`),
   };
+  const actRef = useRef(act);
+  actRef.current = act;
+
+  /* ── drag and drop onto nav ── */
+  const dragItems = useRef<GroupedItem[]>([]);
+  const [draggingKeys, setDraggingKeys] = useState<Set<string>>(new Set());
+  const onRowDragStart = (e: React.DragEvent, item: GroupedItem) => {
+    const k = itemKey(item);
+    const items =
+      selectedKeys.has(k) && selected.length > 0 ? selected : [item];
+    dragItems.current = items;
+    setDraggingKeys(new Set(items.map(itemKey)));
+    e.dataTransfer.effectAllowed = "move";
+    e.dataTransfer.setData(DRAG_MIME, String(items.length));
+    e.dataTransfer.setData("text/plain", items.map(itemTitle).join(", "));
+    try {
+      e.dataTransfer.setDragImage(dragGhost(items.length), 12, 12);
+    } catch {
+      /* some browsers refuse custom drag images */
+    }
+    startRowDrag(items.length);
+  };
+  const onRowDragEnd = () => {
+    setDraggingKeys(new Set());
+    endRowDrag();
+  };
+  useEffect(
+    () =>
+      onRowDrop((target) => {
+        const items = dragItems.current;
+        dragItems.current = [];
+        setDraggingKeys(new Set());
+        endRowDrag();
+        if (!items.length) return;
+        const a = actRef.current;
+        if (target === "archive") a.archive(items);
+        else if (target === "inbox") a.moveToInbox(items);
+        else if (target === "starred") a.star(items, true);
+        else if (target === "snoozed") a.pickSnooze(items);
+        else if (target === "trash") a.requestDelete(items);
+        setSelectedKeys(new Set());
+      }),
+    [],
+  );
 
   /* ── conversation navigation ── */
   const openIndex = openItem
@@ -472,18 +634,19 @@ export default function GmailInbox() {
   const goAdjacent = (delta: number) => {
     const target = displayed[openIndex + delta];
     if (target) open(target, { replace: true });
+    else back();
   };
 
   const convHandle = useRef<ConversationHandle | null>(null);
 
   /* ── keyboard shortcuts ── */
   const mobileSearchRef = useRef<HTMLInputElement>(null);
-  const listScrollRef = useRef<HTMLDivElement>(null);
   const keyState = useRef({
     displayed,
     focused,
     focusedIndex,
     openItem,
+    openIndex,
     selected,
     pane,
     kbdNav,
@@ -493,29 +656,43 @@ export default function GmailInbox() {
     focused,
     focusedIndex,
     openItem,
+    openIndex,
     selected,
     pane,
     kbdNav,
   };
-  const actRef = useRef(act);
-  actRef.current = act;
+  const prefixRef = useRef<{ p: ShortcutPrefix; t: number } | null>(null);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.defaultPrevented || isTypingTarget(e.target)) return;
       if (
         document.querySelector(
-          '[role="dialog"][data-state="open"], [role="menu"], [data-testid="gmail-quick-settings"], [data-testid="gmail-drawer"]',
+          '[role="dialog"][data-state="open"], [role="menu"], [data-testid="gmail-quick-settings"], [data-testid="gmail-drawer"], [data-testid="gmail-m-search-screen"], [data-testid="reply-composer"]:focus-within',
         )
       )
         return;
       const s = keyState.current;
       const a = actRef.current;
-      if (e.key === "Escape" && s.selected.length) {
-        setSelectedKeys(new Set());
+      if (e.key === "Escape") {
+        if (s.selected.length) {
+          clearSelection();
+          e.preventDefault();
+        }
         return;
       }
-      const cmd = shortcutFor(e);
+      const pending =
+        prefixRef.current && Date.now() - prefixRef.current.t < 1500
+          ? prefixRef.current.p
+          : null;
+      prefixRef.current = null;
+      const res = resolveShortcut(e, pending);
+      if (res.prefix) {
+        prefixRef.current = { p: res.prefix, t: Date.now() };
+        e.preventDefault();
+        return;
+      }
+      const cmd = res.cmd;
       if (!cmd) return;
       const targets = s.openItem
         ? [s.openItem]
@@ -525,18 +702,14 @@ export default function GmailInbox() {
             ? [s.focused]
             : [];
       const moveFocus = (delta: number) => {
-        const i = Math.min(
-          s.displayed.length - 1,
-          Math.max(
-            0,
-            (s.kbdNav || s.pane ? s.focusedIndex : delta > 0 ? -1 : 1) + delta,
-          ),
-        );
+        const base =
+          s.kbdNav || s.pane !== "none" ? s.focusedIndex : delta > 0 ? -1 : 1;
+        const i = Math.min(s.displayed.length - 1, Math.max(0, base + delta));
         const it = s.displayed[i];
         if (!it) return;
         setKbdNav(true);
         setFocusedKey(itemKey(it));
-        if (s.pane) open(it, { replace: true });
+        if (s.pane !== "none") open(it, { replace: true });
         requestAnimationFrame(() => {
           const el = document.querySelector<HTMLElement>(
             `[data-key="${CSS.escape(itemKey(it))}"]`,
@@ -545,28 +718,66 @@ export default function GmailInbox() {
           el?.focus({ preventScroll: true });
         });
       };
+      const go = (search: Partial<ListState>) =>
+        navigate(`/${buildListSearch(search)}`);
       let handled = true;
       switch (cmd) {
         case "compose":
           onCompose();
           break;
         case "search":
-          if (isMobile) mobileSearchRef.current?.focus();
+          if (isMobile) setSearchOpen(true);
           else focusSearch();
           break;
         case "help":
           openShortcuts();
           break;
+        case "goInbox":
+          go({ folder: "inbox" });
+          break;
+        case "goStarred":
+          go({ folder: "starred" });
+          break;
+        case "goSent":
+          go({ folder: "sent" });
+          break;
+        case "goDrafts":
+          go({ folder: "drafts" });
+          break;
+        case "goArchive":
+          go({ folder: "archive" });
+          break;
+        case "goSnoozed":
+          go({ folder: "snoozed" });
+          break;
+        case "selectAll":
+          selectPreset("all");
+          break;
+        case "selectNone":
+          selectPreset("none");
+          break;
+        case "selectRead":
+          selectPreset("read");
+          break;
+        case "selectUnread":
+          selectPreset("unread");
+          break;
+        case "selectStarred":
+          selectPreset("starred");
+          break;
+        case "selectUnstarred":
+          selectPreset("unstarred");
+          break;
         case "next":
-          if (s.openItem && !s.pane) goAdjacent(1);
+          if (s.openItem && s.pane === "none") goAdjacent(1);
           else moveFocus(1);
           break;
         case "prev":
-          if (s.openItem && !s.pane) goAdjacent(-1);
+          if (s.openItem && s.pane === "none") goAdjacent(-1);
           else moveFocus(-1);
           break;
         case "open":
-          if (s.focused && !s.openItem) open(s.focused);
+          if (s.focused && (!s.openItem || s.pane !== "none")) open(s.focused);
           else handled = false;
           break;
         case "back":
@@ -578,6 +789,15 @@ export default function GmailInbox() {
         case "archive":
           if (targets.length) a.archive(targets);
           break;
+        case "archiveOlder":
+        case "archiveNewer": {
+          if (!targets.length) break;
+          const delta = cmd === "archiveOlder" ? 1 : -1;
+          const next = s.openItem ? s.displayed[s.openIndex + delta] : null;
+          a.archive(targets);
+          if (next) window.setTimeout(() => open(next, { replace: true }), 0);
+          break;
+        }
         case "star":
           if (targets.length) a.star(targets);
           break;
@@ -594,17 +814,39 @@ export default function GmailInbox() {
         case "snooze":
           if (targets.length) setPick({ items: targets, presets: true });
           break;
+        case "undo":
+          list.undoLast();
+          break;
+        case "moreActions": {
+          if (!targets.length) break;
+          const el = s.focused
+            ? document.querySelector<HTMLElement>(
+                `[data-key="${CSS.escape(itemKey(s.focused))}"]`,
+              )
+            : null;
+          const r = el?.getBoundingClientRect();
+          setMenu({
+            x: r ? r.left + 240 : window.innerWidth / 2,
+            y: r ? r.bottom : 120,
+            items: targets,
+          });
+          break;
+        }
         case "reply":
-          convHandle.current?.reply();
-          handled = !!s.openItem;
-          break;
         case "replyAll":
-          convHandle.current?.replyAll();
-          handled = !!s.openItem;
-          break;
         case "forward":
-          convHandle.current?.forward();
-          handled = !!s.openItem;
+        case "expandAll":
+        case "collapseAll":
+        case "nextMessage":
+        case "prevMessage":
+          if (s.openItem && convHandle.current) convHandle.current[cmd]();
+          else if (
+            !s.openItem &&
+            s.focused &&
+            (cmd === "reply" || cmd === "replyAll" || cmd === "forward")
+          )
+            a.respond(s.focused, cmd);
+          else handled = false;
           break;
       }
       if (handled) e.preventDefault();
@@ -620,29 +862,42 @@ export default function GmailInbox() {
     open,
     back,
     toggleSelect,
+    selectPreset,
+    list.undoLast,
   ]);
 
   /* ── document title ── */
-  const unreadTotal = stats?.unreadCount ?? 0;
-  const folderName =
-    state.q || state.from
-      ? "Search results"
-      : state.label
-        ? labelName(
-            state.label,
-            identities.find((s) => s.email === state.label)?.displayName,
-          )
+  const unreadTotal = shell.counts.inboxUnread;
+  const folderName = searching
+    ? "Search results"
+    : state.label
+      ? labelName(
+          state.label,
+          identities.find((s) => s.email === state.label)?.displayName,
+        )
+      : showTabs
+        ? CATEGORY_LABELS[activeTab]
         : FOLDER_LABELS[state.folder];
   useEffect(() => {
     const who = session?.user?.email ? ` - ${session.user.email}` : "";
     const count =
       state.folder === "inbox" && unreadTotal > 0 ? ` (${unreadTotal})` : "";
-    document.title = `${folderName}${count}${who} - ${brandName}`;
-  }, [folderName, unreadTotal, session?.user?.email, brandName, state.folder]);
+    const base =
+      state.folder === "inbox" && !searching && !state.label
+        ? "Inbox"
+        : folderName;
+    document.title = `${base}${count}${who} - ${brandName}`;
+  }, [
+    folderName,
+    unreadTotal,
+    session?.user?.email,
+    brandName,
+    state.folder,
+    searching,
+    state.label,
+  ]);
 
-  /* ── mobile: search, scroll, pull, infinite ── */
-  const [mSearch, setMSearch] = useState(state.q);
-  useEffect(() => setMSearch(state.q || state.from), [state.q, state.from]);
+  /* ── mobile: scroll, pull, infinite ── */
   const [fabExtended, setFabExtended] = useState(true);
   const lastScroll = useRef(0);
   const onListScroll = (e: React.UIEvent<HTMLDivElement>) => {
@@ -656,8 +911,9 @@ export default function GmailInbox() {
     setEarlier([]);
     if (list.page !== 1) list.setPage(1);
     else list.refresh();
+    refreshCounts();
     return new Promise<void>((r) => setTimeout(r, 700));
-  }, [list]);
+  }, [list, refreshCounts]);
 
   const pull = usePullToRefresh<HTMLDivElement>({
     onRefresh:
@@ -684,16 +940,18 @@ export default function GmailInbox() {
   }, [isMobile, openItem, list, pull.ref]);
 
   /* ── shared bits ── */
-  const showLabels = !state.label && labelsCount(stats) > 1;
+  const showLabels = !state.label && labels.length > 1;
   const initialLoading =
     list.loading && list.items.length === 0 && earlier.length === 0;
+
+  const setListState = (s: ListState) => navigate(`/${buildListSearch(s)}`);
 
   const dialogs = (
     <>
       <ConfirmDialog
         open={!!confirm}
         title={
-          confirm && confirm.items.length > 1
+          confirm && confirm.items.filter((i) => i.type === "person").length > 1
             ? `Delete ${confirm.items.filter((i) => i.type === "person").length} conversations forever?`
             : "Delete forever?"
         }
@@ -724,25 +982,105 @@ export default function GmailInbox() {
           pick.after?.();
         }}
       />
+      <RowMenu
+        state={menu}
+        onClose={() => setMenu(null)}
+        act={act}
+        labels={labels}
+      />
     </>
   );
 
-  const listBody = (narrow: boolean) => {
-    if (list.error && list.items.length === 0)
-      return (
-        <div className="flex flex-col items-center gap-4 px-6 py-16 text-center">
-          <p className="text-sm text-text-secondary">
-            Couldn't load your mail. {list.error}
-          </p>
-          <button
-            type="button"
-            className="gm-pill-btn"
-            onClick={() => list.refresh()}
-          >
-            <RotateCw size={18} /> Try again
-          </button>
+  const offlineBanner = !online && (
+    <div
+      className="gm-offline flex flex-none items-center justify-center gap-2 px-4 py-2 text-sm"
+      role="status"
+    >
+      <WifiOff size={16} /> You're offline. Showing what was last loaded;
+      changes need a connection.
+    </div>
+  );
+
+  const errorBox = (
+    <div className="flex flex-col items-center gap-4 px-6 py-16 text-center">
+      <p className="text-sm text-text-secondary">
+        Couldn't load your mail.{" "}
+        {online ? list.error : "Check your connection."}
+      </p>
+      <button
+        type="button"
+        className="gm-pill-btn"
+        onClick={() => list.refresh()}
+      >
+        <RotateCw size={18} /> Try again
+      </button>
+    </div>
+  );
+
+  const onContextMenu = (e: React.MouseEvent, item: GroupedItem) => {
+    e.preventDefault();
+    const k = itemKey(item);
+    const items =
+      selectedKeys.has(k) && selected.length > 1 ? selected : [item];
+    setFocusedKey(k);
+    setMenu({ x: e.clientX, y: e.clientY, items });
+  };
+
+  const renderRows = (rows: GroupedItem[], narrow: boolean) =>
+    rows.map((it) => (
+      <MailRow
+        key={itemKey(it)}
+        item={it}
+        folder={state.folder}
+        selected={selectedKeys.has(itemKey(it)) || !!allItems}
+        focused={
+          (kbdNav && focused ? itemKey(focused) === itemKey(it) : false) ||
+          (pane !== "none" && openKey === itemKey(it))
+        }
+        dragging={draggingKeys.has(itemKey(it))}
+        showLabels={showLabels}
+        identities={identities}
+        act={act}
+        onOpen={open}
+        onToggleSelect={toggleSelect}
+        onFocus={(x) => setFocusedKey(itemKey(x))}
+        onContextMenu={onContextMenu}
+        onDragStart={onRowDragStart}
+        onDragEnd={onRowDragEnd}
+        narrow={narrow}
+      />
+    ));
+
+  const sectioned = (rows: GroupedItem[], narrow: boolean) => {
+    if (inboxType === "default") return renderRows(rows, narrow);
+    const isFirst = (it: GroupedItem) =>
+      inboxType === "unread" ? it.unreadCount > 0 : it.starred;
+    const byDate = (a: GroupedItem, b: GroupedItem) =>
+      b.lastEmailAt - a.lastEmailAt;
+    const first = rows.filter(isFirst).sort(byDate);
+    const rest = rows.filter((r) => !isFirst(r)).sort(byDate);
+    return (
+      <>
+        <div className="gm-section-head">
+          {inboxType === "unread" ? "Unread" : "Starred"}
         </div>
-      );
+        {first.length ? (
+          renderRows(first, narrow)
+        ) : (
+          <p className="px-4 py-3 text-sm text-text-secondary">
+            {inboxType === "unread"
+              ? "Woohoo! You've read all the messages in your inbox."
+              : "No starred conversations on this page."}
+          </p>
+        )}
+        <div className="gm-section-head">Everything else</div>
+        {renderRows(rest, narrow)}
+      </>
+    );
+  };
+
+  const listBody = (narrow: boolean) => {
+    if (list.error && list.items.length === 0) return errorBox;
     if (initialLoading) return isMobile ? <MobileSkeleton /> : <SkeletonRows />;
     if (displayed.length === 0)
       return <EmptyState state={state} onCompose={() => onCompose()} />;
@@ -755,29 +1093,13 @@ export default function GmailInbox() {
           act={act}
           onOpen={open}
           onToggleSelect={(it) => toggleSelect(it)}
+          swipeLeft={view.swipeLeft}
+          swipeRight={view.swipeRight}
         />
       );
     return (
       <div role="grid" aria-label={folderName} aria-rowcount={displayed.length}>
-        {displayed.map((it) => (
-          <MailRow
-            key={itemKey(it)}
-            item={it}
-            folder={state.folder}
-            selected={selectedKeys.has(itemKey(it))}
-            focused={
-              (kbdNav && focused ? itemKey(focused) === itemKey(it) : false) ||
-              (pane && openKey === itemKey(it))
-            }
-            showLabels={showLabels}
-            identities={identities}
-            act={act}
-            onOpen={open}
-            onToggleSelect={toggleSelect}
-            onFocus={(x) => setFocusedKey(itemKey(x))}
-            narrow={narrow}
-          />
-        ))}
+        {sectioned(displayed, narrow)}
       </div>
     );
   };
@@ -785,10 +1107,17 @@ export default function GmailInbox() {
   const position =
     openItem && openIndex >= 0
       ? {
-          index: (list.page - 1) * MAIL_PAGE_SIZE + openIndex + 1,
+          index: (list.page - 1) * PAGE_SIZE + openIndex + 1,
           total: list.total,
         }
       : undefined;
+
+  const clearDo = () => {
+    if (!params.get("do")) return;
+    const p = new URLSearchParams(params);
+    p.delete("do");
+    navigate(`${location.pathname}?${p.toString()}`, { replace: true });
+  };
 
   const conversation = (mobile: boolean, inPane: boolean) =>
     openItem ? (
@@ -813,6 +1142,10 @@ export default function GmailInbox() {
         focusMessageId={
           location.hash.startsWith("#m=") ? location.hash.slice(3) : null
         }
+        initialAction={initialAction}
+        onActionDone={clearDo}
+        backLabel={`Back to ${showTabs ? "Inbox" : folderName}`}
+        onOpenNewWindow={() => act.openInNewWindow(openItem)}
       />
     ) : null;
 
@@ -820,7 +1153,11 @@ export default function GmailInbox() {
   if (isMobile) {
     if (openItem || openRef) {
       return (
-        <div className="gm-m-screen flex min-h-0 flex-1 flex-col">
+        <div
+          className="gm-m-screen flex min-h-0 flex-1 flex-col"
+          data-thread-open
+        >
+          {offlineBanner}
           {conversation(true, false) ?? (
             <div className="flex flex-1 items-center justify-center">
               <span className="gm-skel h-10 w-10 rounded-full" />
@@ -830,7 +1167,7 @@ export default function GmailInbox() {
         </div>
       );
     }
-    const searching = !!(state.q || state.from);
+    const query = searching || state.label ? stateToQuery(state, labels) : "";
     return (
       <div
         className="gm-m-screen relative flex min-h-0 flex-1 flex-col"
@@ -842,31 +1179,34 @@ export default function GmailInbox() {
               selected={selected}
               folder={state.folder}
               act={act}
-              onClear={() => setSelectedKeys(new Set())}
+              onClear={clearSelection}
             />
           ) : (
             <div className="pb-1">
               <MobileSearchBar
-                value={mSearch}
-                onChange={setMSearch}
+                value={query}
+                onChange={() => {}}
                 inputRef={mobileSearchRef}
-                searching={searching}
-                onSubmit={() => {
-                  const q = mSearch.trim();
-                  navigate(
-                    q ? `/${buildListSearch({ folder: "all", q })}` : "/",
-                  );
-                }}
-                onClear={() => {
-                  setMSearch("");
-                  if (searching) navigate("/");
-                }}
+                searching={searching || !!state.label}
+                onSubmit={() => {}}
+                onActivate={() => setSearchOpen(true)}
+                onClear={() => navigate("/")}
                 onMenu={shell.openDrawer}
                 onAccount={shell.openAccount}
               />
             </div>
           )}
+          {searching && (
+            <SearchChips
+              state={state}
+              labels={labels}
+              senders={displayed}
+              onChange={setListState}
+              compact
+            />
+          )}
         </div>
+        {offlineBanner}
         <div
           ref={pull.ref}
           onScroll={onListScroll}
@@ -885,8 +1225,18 @@ export default function GmailInbox() {
             }}
           >
             <p className="px-4 pb-1 pt-3 text-sm font-medium text-text-secondary">
-              {folderName}
+              {searching
+                ? `Results in ${state.folder === "all" ? "all mail" : FOLDER_LABELS[state.folder]}`
+                : folderName}
             </p>
+            {showTabs && activeTab === "primary" && (
+              <CategoryRows
+                counts={shell.counts.categories}
+                onOpen={(c) =>
+                  navigate(`/${buildListSearch({ folder: "inbox", tab: c })}`)
+                }
+              />
+            )}
             {listBody(false)}
             <div ref={sentinelRef} className="h-px" />
             {loadingMore && (
@@ -907,12 +1257,21 @@ export default function GmailInbox() {
         {selected.length === 0 && (
           <ComposeFab extended={fabExtended} onClick={() => onCompose()} />
         )}
+        {searchOpen && (
+          <MobileSearchScreen
+            initial={query}
+            labels={labels}
+            onClose={() => setSearchOpen(false)}
+          />
+        )}
         {dialogs}
       </div>
     );
   }
 
   /* ── desktop ── */
+  const pageAllSelected =
+    displayed.length > 0 && pageSelected.length === displayed.length;
   const toolbar = (
     <ListToolbar
       items={displayed}
@@ -920,9 +1279,12 @@ export default function GmailInbox() {
       folder={state.folder}
       act={act}
       onSelectPreset={selectPreset}
-      onRefresh={() => list.refresh()}
+      onRefresh={() => {
+        list.refresh();
+        refreshCounts();
+      }}
       onMarkAllRead={() => act.markRead(displayed)}
-      range={rangeLabel(list.page, MAIL_PAGE_SIZE, list.total)}
+      range={rangeLabel(list.page, PAGE_SIZE, list.total)}
       canPrev={list.page > 1}
       canNext={list.page < list.pageCount}
       onPrev={() => list.setPage(list.page - 1)}
@@ -933,18 +1295,67 @@ export default function GmailInbox() {
   const listPanel = (narrow: boolean) => (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col">
       {toolbar}
+      {searching && (
+        <>
+          <div className="flex items-baseline gap-2 px-4 pt-1 text-sm">
+            <span className="font-medium text-text-primary">Results</span>
+            {!list.loading && (
+              <span className="text-text-secondary">
+                {list.total.toLocaleString()} conversation
+                {list.total === 1 ? "" : "s"}
+                {state.folder !== "all" && ` in ${FOLDER_LABELS[state.folder]}`}
+              </span>
+            )}
+          </div>
+          <SearchChips
+            state={state}
+            labels={labels}
+            senders={displayed}
+            onChange={setListState}
+          />
+        </>
+      )}
+      {showTabs && (
+        <CategoryTabs
+          active={activeTab}
+          counts={shell.counts.categories}
+          onSelect={(c) =>
+            navigate(`/${buildListSearch({ folder: "inbox", tab: c })}`)
+          }
+        />
+      )}
+      {(pageAllSelected || allItems) && list.total > displayed.length && (
+        <SelectAllBanner
+          pageCount={displayed.length}
+          total={list.total}
+          where={folderWhere}
+          allSelected={!!allItems}
+          loading={allLoading}
+          onSelectAll={() => {
+            setAllLoading(true);
+            list
+              .fetchAll()
+              .then((all) => setAllItems(filterClient(all)))
+              .catch(() =>
+                showToast({ kind: "error", message: "Could not select all" }),
+              )
+              .finally(() => setAllLoading(false));
+          }}
+          onClear={clearSelection}
+        />
+      )}
+      {offlineBanner}
       <div
-        ref={listScrollRef}
         className={cn(
-          "gm-list min-h-0 flex-1 overflow-y-auto border-t border-border",
+          "gm-list min-h-0 flex-1 overflow-y-auto",
+          !showTabs && !searching && "border-t border-border",
         )}
         data-density={density}
       >
         {listBody(narrow)}
         {displayed.length > 0 && (
           <p className="py-6 text-center text-xs text-text-tertiary">
-            {list.total.toLocaleString()} conversation
-            {list.total === 1 ? "" : "s"}
+            {rangeLabel(list.page, PAGE_SIZE, list.total)}
             {" · "}
             <button
               type="button"
@@ -953,28 +1364,50 @@ export default function GmailInbox() {
             >
               Keyboard shortcuts
             </button>
+            {" · "}
+            <button
+              type="button"
+              className="hover:underline"
+              onClick={shell.openQuickSettings}
+            >
+              Display settings
+            </button>
           </p>
         )}
       </div>
     </div>
   );
 
+  const emptyPane = (
+    <div className="flex flex-1 flex-col items-center justify-center gap-2 text-text-tertiary">
+      <span className="text-sm">No conversations selected</span>
+    </div>
+  );
+
   return (
     <div
-      className="flex min-h-0 flex-1 overflow-hidden rounded-2xl bg-card"
+      className={cn(
+        "flex min-h-0 flex-1 overflow-hidden rounded-2xl bg-card",
+        pane === "below" && "flex-col",
+      )}
       data-testid="gmail-inbox"
     >
-      {pane ? (
+      {pane === "right" ? (
         <>
           <div className="flex min-h-0 w-[46%] min-w-[380px] flex-none flex-col border-r border-border">
             {listPanel(true)}
           </div>
           <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-            {conversation(false, true) ?? (
-              <div className="flex flex-1 flex-col items-center justify-center gap-2 text-text-tertiary">
-                <span className="text-sm">No conversation selected</span>
-              </div>
-            )}
+            {conversation(false, true) ?? emptyPane}
+          </div>
+        </>
+      ) : pane === "below" ? (
+        <>
+          <div className="flex h-1/2 min-h-0 flex-none flex-col border-b border-border">
+            {listPanel(false)}
+          </div>
+          <div className="flex min-h-0 flex-1 flex-col">
+            {conversation(false, true) ?? emptyPane}
           </div>
         </>
       ) : openItem || openRef ? (
@@ -988,15 +1421,5 @@ export default function GmailInbox() {
       )}
       {dialogs}
     </div>
-  );
-}
-
-function labelsCount(
-  stats: { senderIdentities?: unknown[]; recipients?: unknown[] } | null,
-) {
-  if (!stats) return 0;
-  return Math.max(
-    stats.senderIdentities?.length ?? 0,
-    stats.recipients?.length ?? 0,
   );
 }

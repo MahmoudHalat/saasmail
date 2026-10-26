@@ -1,11 +1,13 @@
 import { memo, type ReactNode } from "react";
 import {
   Archive,
+  BellOff,
   ChevronDown,
   ChevronLeft,
   ChevronRight,
   Clock,
   EllipsisVertical,
+  GripVertical,
   Inbox as InboxIcon,
   Mail,
   MailOpen,
@@ -15,10 +17,16 @@ import {
   Star,
   Trash2,
 } from "lucide-react";
-import type { GroupedItem, Stats } from "@/lib/api";
+import type { GroupedItem, MailCategory, Stats } from "@/lib/api";
+import { CATEGORY_ICONS } from "./Nav";
 import { itemKey, itemTitle } from "@/hooks/useMailList";
 import { cn } from "@/lib/utils";
-import { formatListDate, type GmailFolder } from "./lib";
+import {
+  CATEGORIES,
+  CATEGORY_LABELS,
+  formatListDate,
+  type GmailFolder,
+} from "./lib";
 import { inInboxView, type RowActions } from "./actions";
 import { GmMenu, GmMenuItem, LabelChip, SnoozeMenu } from "./ui";
 
@@ -244,6 +252,53 @@ export function ListToolbar({
               className={allPinned ? "fill-current text-accent" : undefined}
             />
           </IconBtn>
+          <GmMenu
+            trigger={
+              <button
+                type="button"
+                className="gm-icon-btn"
+                aria-label="More actions"
+                title="More"
+                data-testid="gmail-bulk-more"
+              >
+                <EllipsisVertical size={20} />
+              </button>
+            }
+          >
+            {anyUnread ? (
+              <GmMenuItem
+                icon={<Mail size={20} />}
+                onSelect={() => void act.markUnread(selected)}
+              >
+                Mark as unread
+              </GmMenuItem>
+            ) : (
+              <GmMenuItem
+                icon={<MailOpen size={20} />}
+                onSelect={() => act.markRead(selected)}
+              >
+                Mark as read
+              </GmMenuItem>
+            )}
+            <GmMenuItem
+              icon={<BellOff size={20} />}
+              onSelect={() => act.mute(selected)}
+            >
+              Mute
+            </GmMenuItem>
+            <GmMenuItem
+              icon={<InboxIcon size={20} />}
+              onSelect={() => act.moveToInbox(selected)}
+            >
+              Move to inbox
+            </GmMenuItem>
+            <GmMenuItem
+              icon={<Archive size={20} />}
+              onSelect={() => act.archive(selected)}
+            >
+              Archive
+            </GmMenuItem>
+          </GmMenu>
         </div>
       )}
 
@@ -274,6 +329,10 @@ interface RowProps {
   onOpen: (item: GroupedItem) => void;
   onToggleSelect: (item: GroupedItem, range: boolean) => void;
   onFocus: (item: GroupedItem) => void;
+  onContextMenu: (e: React.MouseEvent, item: GroupedItem) => void;
+  dragging?: boolean;
+  onDragStart: (e: React.DragEvent, item: GroupedItem) => void;
+  onDragEnd: () => void;
   narrow?: boolean;
 }
 
@@ -292,6 +351,10 @@ export const MailRow = memo(function MailRow({
   onOpen,
   onToggleSelect,
   onFocus,
+  onContextMenu,
+  dragging,
+  onDragStart,
+  onDragEnd,
   narrow,
 }: RowProps) {
   const unread = item.unreadCount > 0;
@@ -307,21 +370,32 @@ export const MailRow = memo(function MailRow({
       data-unread={unread ? "true" : undefined}
       data-selected={selected ? "true" : undefined}
       data-focused={focused ? "true" : undefined}
+      data-dragging={dragging ? "true" : undefined}
       data-testid="gmail-row"
       data-key={itemKey(item)}
       aria-selected={selected}
+      aria-label={`${unread ? "Unread, " : ""}${title}, ${item.latestSubject ?? "no subject"}, ${formatListDate(item.lastEmailAt)}`}
+      draggable
+      onDragStart={(e) => onDragStart(e, item)}
+      onDragEnd={onDragEnd}
       onClick={() => onOpen(item)}
+      onContextMenu={(e) => onContextMenu(e, item)}
       onFocus={() => onFocus(item)}
       onKeyDown={(e) => {
         if (e.target !== e.currentTarget) return;
-        if (e.key === "Enter") onOpen(item);
+        if (e.key === "Enter") {
+          e.preventDefault();
+          onOpen(item);
+        }
         if (e.key === " ") {
           e.preventDefault();
           onToggleSelect(item, false);
         }
       }}
     >
-      <span className="w-2 flex-none" />
+      <span className="gm-grip" aria-hidden title="Drag to a folder">
+        <GripVertical size={14} />
+      </span>
       <label
         className="flex h-10 w-8 flex-none cursor-pointer items-center justify-center"
         onClick={stop}
@@ -407,6 +481,7 @@ export const MailRow = memo(function MailRow({
                 displayName={
                   identities.find((s) => s.email === addr)?.displayName
                 }
+                onClick={() => act.showLabel(addr)}
               />
             ))}
         <span className="min-w-0 truncate">
@@ -544,6 +619,116 @@ export function SkeletonRows({ count = 12 }: { count?: number }) {
           <span className="gm-skel ml-auto h-3 w-12" />
         </div>
       ))}
+    </div>
+  );
+}
+
+/* ── Inbox tabs ────────────────────────────────────────────────────── */
+
+export function CategoryTabs({
+  active,
+  counts,
+  onSelect,
+}: {
+  active: MailCategory;
+  counts: Partial<Record<MailCategory, number>>;
+  onSelect: (c: MailCategory) => void;
+}) {
+  return (
+    <div
+      role="tablist"
+      aria-label="Inbox categories"
+      className="flex h-14 flex-none border-b border-border"
+      data-testid="gmail-tabs"
+    >
+      {CATEGORIES.map((c) => {
+        const Icon = CATEGORY_ICONS[c];
+        const n = c === "primary" ? 0 : (counts[c] ?? 0);
+        const on = c === active;
+        return (
+          <button
+            key={c}
+            type="button"
+            role="tab"
+            aria-selected={on}
+            className="gm-tab"
+            data-cat={c}
+            data-active={on ? "true" : undefined}
+            onClick={() => onSelect(c)}
+            title={
+              n > 0 ? `${CATEGORY_LABELS[c]}: ${n} unread` : CATEGORY_LABELS[c]
+            }
+            data-testid={`gmail-tab-${c}`}
+          >
+            <Icon size={20} className="gm-tab-icon" />
+            <span className="truncate">{CATEGORY_LABELS[c]}</span>
+            {n > 0 && (
+              <span className="gm-tab-badge">{n > 99 ? "99+" : n} new</span>
+            )}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+/* ── "Select all N conversations" banner ───────────────────────────── */
+
+export function SelectAllBanner({
+  pageCount,
+  total,
+  where,
+  allSelected,
+  loading,
+  onSelectAll,
+  onClear,
+}: {
+  pageCount: number;
+  total: number;
+  where: string;
+  allSelected: boolean;
+  loading: boolean;
+  onSelectAll: () => void;
+  onClear: () => void;
+}) {
+  return (
+    <div
+      className="flex h-10 flex-none items-center justify-center gap-2 border-b border-border bg-bg-subtle px-4 text-sm"
+      role="status"
+      data-testid="gmail-select-all-banner"
+    >
+      {allSelected ? (
+        <>
+          <span>
+            All <b>{total.toLocaleString()}</b> conversations in {where} are
+            selected.
+          </span>
+          <button
+            type="button"
+            className="font-medium text-accent hover:underline"
+            onClick={onClear}
+          >
+            Clear selection
+          </button>
+        </>
+      ) : (
+        <>
+          <span>
+            All <b>{pageCount}</b> conversations on this page are selected.
+          </span>
+          <button
+            type="button"
+            className="font-medium text-accent hover:underline disabled:opacity-60"
+            onClick={onSelectAll}
+            disabled={loading}
+            data-testid="gmail-select-all-pages"
+          >
+            {loading
+              ? "Selecting…"
+              : `Select all ${total.toLocaleString()} conversations in ${where}`}
+          </button>
+        </>
+      )}
     </div>
   );
 }

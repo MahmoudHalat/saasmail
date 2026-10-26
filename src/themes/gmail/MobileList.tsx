@@ -28,6 +28,7 @@ import { cn } from "@/lib/utils";
 import { AccountAvatar } from "./GmailShell";
 import { formatListDate, type GmailFolder } from "./lib";
 import { inInboxView, type RowActions } from "./actions";
+import type { SwipeAction } from "./state";
 import { Avatar, GmMenu, GmMenuItem } from "./ui";
 
 /* ── Swipeable row ─────────────────────────────────────────────────── */
@@ -42,6 +43,8 @@ function MobileRow({
   act,
   onOpen,
   onToggleSelect,
+  swipeLeft,
+  swipeRight,
 }: {
   item: GroupedItem;
   folder: GmailFolder;
@@ -50,6 +53,8 @@ function MobileRow({
   act: RowActions;
   onOpen: (item: GroupedItem) => void;
   onToggleSelect: (item: GroupedItem) => void;
+  swipeLeft: SwipeAction;
+  swipeRight: SwipeAction;
 }) {
   const rowRef = useRef<HTMLDivElement>(null);
   const [dx, setDx] = useState(0);
@@ -67,9 +72,18 @@ function MobileRow({
   const title = itemTitle(item);
   const inView = inInboxView(item);
 
-  const swipeAction = () => {
-    if (inView) act.archive([item]);
-    else act.moveToInbox([item]);
+  const actionFor = (dir: number): SwipeAction =>
+    dir > 0 ? swipeRight : swipeLeft;
+  /** Archive leaves the list; the others act and the row springs back. */
+  const runSwipe = (a: SwipeAction) => {
+    if (a === "archive") {
+      if (inView) act.archive([item]);
+      else act.moveToInbox([item]);
+    } else if (a === "delete") act.requestDelete([item]);
+    else if (a === "read") {
+      if (unread) act.markRead([item]);
+      else void act.markUnread([item]);
+    } else if (a === "snooze") act.pickSnooze([item]);
   };
 
   const onPointerDown = (e: React.PointerEvent) => {
@@ -110,7 +124,12 @@ function MobileRow({
         g.mode = "scroll";
       }
     }
-    if (g.mode === "swipe") setDx(mx);
+    if (g.mode === "swipe")
+      setDx(
+        actionFor(mx) === "none"
+          ? Math.sign(mx) * Math.min(24, Math.abs(mx) / 4)
+          : mx,
+      );
   };
 
   const finish = (e: React.PointerEvent) => {
@@ -121,11 +140,17 @@ function MobileRow({
     suppressClick.current = true;
     const width = rowRef.current?.offsetWidth ?? 360;
     const mx = e.clientX - g.x;
-    if (Math.abs(mx) > width * SWIPE_FRACTION) {
-      const dir = mx > 0 ? 1 : -1;
-      setLeaving(dir);
-      setDx(dir * width);
-      window.setTimeout(swipeAction, 180);
+    const dir = mx > 0 ? 1 : -1;
+    const a = actionFor(dir);
+    if (a !== "none" && Math.abs(mx) > width * SWIPE_FRACTION) {
+      if (a === "archive") {
+        setLeaving(dir);
+        setDx(dir * width);
+        window.setTimeout(() => runSwipe(a), 180);
+      } else {
+        setDx(0);
+        runSwipe(a);
+      }
     } else {
       setDx(0);
     }
@@ -154,10 +179,20 @@ function MobileRow({
       {swiping && (
         <div
           className="gm-m-swipe-bg"
+          data-action={actionFor(dx)}
           style={{ justifyContent: dx > 0 ? "flex-start" : "flex-end" }}
           aria-hidden
         >
-          {inView ? <Archive size={24} /> : <InboxIcon size={24} />}
+          {(() => {
+            const a = actionFor(dx);
+            if (a === "archive")
+              return inView ? <Archive size={24} /> : <InboxIcon size={24} />;
+            if (a === "delete") return <Trash2 size={24} />;
+            if (a === "read")
+              return unread ? <MailOpen size={24} /> : <Mail size={24} />;
+            if (a === "snooze") return <Clock size={24} />;
+            return null;
+          })()}
         </div>
       )}
       <div
@@ -197,9 +232,12 @@ function MobileRow({
           aria-pressed={selected}
           onClick={(e) => {
             e.stopPropagation();
+            if (suppressClick.current) {
+              suppressClick.current = false;
+              return;
+            }
             onToggleSelect(item);
           }}
-          onPointerDown={(e) => e.stopPropagation()}
           data-testid="gmail-mrow-avatar"
         >
           {selected ? (
@@ -283,9 +321,12 @@ function MobileRow({
               className="-mr-2 -mt-1 flex h-9 w-9 flex-none items-center justify-center text-text-secondary"
               aria-label={item.starred ? "Starred" : "Not starred"}
               aria-pressed={item.starred}
-              onPointerDown={(e) => e.stopPropagation()}
               onClick={(e) => {
                 e.stopPropagation();
+                if (suppressClick.current) {
+                  suppressClick.current = false;
+                  return;
+                }
                 act.star([item]);
               }}
             >
@@ -312,7 +353,10 @@ export function MobileSearchBar({
   inputRef,
   searching,
   onClear,
+  onActivate,
 }: {
+  /** Open the full-screen search instead of typing in place. */
+  onActivate?: () => void;
   value: string;
   onChange: (v: string) => void;
   onSubmit: () => void;
@@ -360,6 +404,8 @@ export function MobileSearchBar({
         onChange={(e) => onChange(e.target.value)}
         placeholder="Search in mail"
         aria-label="Search in mail"
+        onFocus={onActivate}
+        readOnly={!!onActivate}
         enterKeyHint="search"
         className="h-full min-w-0 flex-1 bg-transparent px-1 text-base text-text-primary outline-none placeholder:text-text-secondary"
         data-testid="gmail-m-search"
@@ -530,7 +576,11 @@ export function MobileRows({
   act,
   onOpen,
   onToggleSelect,
+  swipeLeft,
+  swipeRight,
 }: {
+  swipeLeft: SwipeAction;
+  swipeRight: SwipeAction;
   items: GroupedItem[];
   folder: GmailFolder;
   selectedKeys: Set<string>;
@@ -551,6 +601,8 @@ export function MobileRows({
           act={act}
           onOpen={onOpen}
           onToggleSelect={onToggleSelect}
+          swipeLeft={swipeLeft}
+          swipeRight={swipeRight}
         />
       ))}
     </div>

@@ -1,9 +1,9 @@
 /**
  * Pure helpers for the Gmail layout: date formatting the way Gmail writes
- * it, URL <-> folder state, avatar/label colours and the keyboard shortcut
- * map. Kept free of React so they are easy to unit test.
+ * it, URL <-> list state, Gmail search operators, avatar/label colours and
+ * the keyboard shortcut map. Kept free of React so they are easy to test.
  */
-import type { MailFolder } from "@/lib/api";
+import type { MailCategory, MailFolder } from "@/lib/api";
 
 /* ── Dates ─────────────────────────────────────────────────────────── */
 
@@ -91,67 +91,171 @@ export const GMAIL_FOLDERS: GmailFolder[] = [
   "all",
 ];
 
+export const CATEGORIES: MailCategory[] = [
+  "primary",
+  "promotions",
+  "social",
+  "updates",
+];
+
+export const CATEGORY_LABELS: Record<MailCategory, string> = {
+  primary: "Primary",
+  promotions: "Promotions",
+  social: "Social",
+  updates: "Updates",
+};
+
+/** Search date window ("Any time" chip). */
+export type Within = "" | "1d" | "7d" | "1m" | "6m" | "1y" | "older1y";
+
+export const WITHIN_LABELS: Record<Within, string> = {
+  "": "Any time",
+  "1d": "Past day",
+  "7d": "Past week",
+  "1m": "Past month",
+  "6m": "Past 6 months",
+  "1y": "Past year",
+  older1y: "Older than a year",
+};
+
 export interface ListState {
   folder: GmailFolder;
   /** Inbox address used as a label filter. */
   label: string | null;
+  /** Free-text search words. */
   q: string;
   unread: boolean;
+  /** `is:read` — rows with nothing unread. */
+  read: boolean;
   attachment: boolean;
-  /** Sender filter from advanced search. */
+  /** Sender filter. */
   from: string;
+  /** Inbox tab (only applies to the inbox folder). */
+  tab: MailCategory | null;
+  /** Category filter from a search (`category:`). */
+  category: MailCategory | null;
+  within: Within;
+}
+
+const EMPTY: ListState = {
+  folder: "inbox",
+  label: null,
+  q: "",
+  unread: false,
+  read: false,
+  attachment: false,
+  from: "",
+  tab: null,
+  category: null,
+  within: "",
+};
+
+/** True when the list is a search (Gmail shows chips + "Results"). */
+export function isSearch(s: ListState): boolean {
+  return !!(
+    s.q ||
+    s.from ||
+    s.unread ||
+    s.read ||
+    s.attachment ||
+    s.within ||
+    s.category
+  );
 }
 
 export function parseListState(params: URLSearchParams): ListState {
   const raw = params.get("folder");
   const label = params.get("label") || null;
-  const q = params.get("q") ?? "";
-  const from = params.get("from") ?? "";
-  let folder: GmailFolder = GMAIL_FOLDERS.includes(raw as GmailFolder)
+  const tab = params.get("tab") as MailCategory | null;
+  const category = params.get("category") as MailCategory | null;
+  const within = (params.get("within") ?? "") as Within;
+  const s: ListState = {
+    ...EMPTY,
+    label,
+    q: params.get("q") ?? "",
+    from: params.get("from") ?? "",
+    unread: params.get("unread") === "1",
+    read: params.get("read") === "1",
+    attachment: params.get("has") === "attachment",
+    tab: tab && CATEGORIES.includes(tab) ? tab : null,
+    category: category && CATEGORIES.includes(category) ? category : null,
+    within: within in WITHIN_LABELS ? within : "",
+  };
+  s.folder = GMAIL_FOLDERS.includes(raw as GmailFolder)
     ? (raw as GmailFolder)
     : "inbox";
   // A label or a search with no explicit folder looks across all mail, like
   // Gmail's label views and search results.
-  if (!raw && (label || q || from)) folder = "all";
-  return {
-    folder,
-    label,
-    q,
-    unread: params.get("unread") === "1",
-    attachment: params.get("has") === "attachment",
-    from,
-  };
+  if (!raw && (label || isSearch(s))) s.folder = "all";
+  return s;
 }
 
 /** Query string (with leading "?", or "" for the plain inbox). */
-export function buildListSearch(s: Partial<ListState>): string {
+export function buildListSearch(input: Partial<ListState>): string {
+  const s: ListState = { ...EMPTY, ...input };
   const p = new URLSearchParams();
-  const folder = s.folder ?? "inbox";
-  const implicitAll =
-    folder === "all" && (s.label || s.q || s.from) ? true : false;
-  if (folder !== "inbox" && !implicitAll) p.set("folder", folder);
+  const implicitAll = s.folder === "all" && (!!s.label || isSearch(s));
+  if (s.folder !== "inbox" && !implicitAll) p.set("folder", s.folder);
+  if (s.folder === "inbox" && s.tab && s.tab !== "primary") p.set("tab", s.tab);
   if (s.label) p.set("label", s.label);
   if (s.q) p.set("q", s.q);
   if (s.from) p.set("from", s.from);
   if (s.unread) p.set("unread", "1");
+  if (s.read) p.set("read", "1");
   if (s.attachment) p.set("has", "attachment");
+  if (s.category) p.set("category", s.category);
+  if (s.within) p.set("within", s.within);
   const str = p.toString();
   return str ? `?${str}` : "";
 }
 
-/** Map a Gmail folder to the useMailList query. */
-export function folderQuery(s: ListState): {
+/** Map list state to the list query (API params). */
+export function folderQuery(
+  s: ListState,
+  tabsOn: boolean,
+): {
   folder: MailFolder;
   drafts?: boolean;
   sequenced?: boolean;
+  category?: MailCategory;
 } {
+  const category =
+    s.category ??
+    (s.folder === "inbox" && tabsOn && !s.label && !isSearch(s)
+      ? (s.tab ?? "primary")
+      : undefined);
   switch (s.folder) {
     case "drafts":
-      return { folder: "all", drafts: true };
+      return { folder: "all", drafts: true, category };
     case "sequenced":
-      return { folder: "all", sequenced: true };
+      return { folder: "all", sequenced: true, category };
     default:
-      return { folder: s.folder };
+      return { folder: s.folder, category };
+  }
+}
+
+/** Seconds window for a `within` value: [after, before] (either may be null). */
+export function withinRange(
+  w: Within,
+  now: Date = new Date(),
+): { after: number | null; before: number | null } {
+  const t = Math.floor(now.getTime() / 1000);
+  const day = 86400;
+  switch (w) {
+    case "1d":
+      return { after: t - day, before: null };
+    case "7d":
+      return { after: t - 7 * day, before: null };
+    case "1m":
+      return { after: t - 31 * day, before: null };
+    case "6m":
+      return { after: t - 183 * day, before: null };
+    case "1y":
+      return { after: t - 365 * day, before: null };
+    case "older1y":
+      return { after: null, before: t - 365 * day };
+    default:
+      return { after: null, before: null };
   }
 }
 
@@ -178,6 +282,142 @@ export function parseOpen(
 
 export function openParam(item: { type: "person" | "group"; id: string }) {
   return `${item.type === "person" ? "p" : "g"}:${item.id}`;
+}
+
+/* ── Gmail search operators ────────────────────────────────────────── */
+
+const IN_FOLDERS: Record<string, GmailFolder> = {
+  inbox: "inbox",
+  archive: "archive",
+  sent: "sent",
+  drafts: "drafts",
+  draft: "drafts",
+  anywhere: "all",
+  all: "all",
+  snoozed: "snoozed",
+  starred: "starred",
+};
+
+const OLDER_NEWER: Record<string, Within> = {
+  "1d": "1d",
+  "7d": "7d",
+  "1w": "7d",
+  "1m": "1m",
+  "6m": "6m",
+  "1y": "1y",
+};
+
+/**
+ * Parse a Gmail search box query into list state. Understands from:,
+ * is:unread|read|starred|snoozed, has:attachment, in:inbox|archive|sent|
+ * drafts|anywhere, label:, category:, newer_than:, older_than:1y. Values
+ * may be quoted. Anything else stays as free text.
+ *
+ * `labels` maps label names (and addresses) to inbox addresses so
+ * `label:support` finds "support@acme.com".
+ */
+export function parseSearchQuery(
+  query: string,
+  labels: Array<{ address: string; displayName?: string | null }> = [],
+): ListState {
+  const s: ListState = { ...EMPTY, folder: "all" };
+  const words: string[] = [];
+  const re = /(-?)([a-z_]+):("([^"]*)"|(\S+))|"([^"]*)"|(\S+)/gi;
+  let m: RegExpExecArray | null;
+  let explicitFolder = false;
+  while ((m = re.exec(query))) {
+    if (m[2]) {
+      const op = m[2].toLowerCase();
+      const value = (m[4] ?? m[5] ?? "").trim();
+      const v = value.toLowerCase();
+      switch (op) {
+        case "from":
+          s.from = value;
+          continue;
+        case "is":
+          if (v === "unread") s.unread = true;
+          else if (v === "read") s.read = true;
+          else if (v === "starred") {
+            s.folder = "starred";
+            explicitFolder = true;
+          } else if (v === "snoozed") {
+            s.folder = "snoozed";
+            explicitFolder = true;
+          } else words.push(m[0]);
+          continue;
+        case "has":
+          if (v === "attachment" || v === "attachments") s.attachment = true;
+          else words.push(m[0]);
+          continue;
+        case "in":
+          if (IN_FOLDERS[v]) {
+            s.folder = IN_FOLDERS[v];
+            explicitFolder = true;
+          } else words.push(m[0]);
+          continue;
+        case "label": {
+          const hit = labels.find(
+            (l) =>
+              l.address.toLowerCase() === v ||
+              labelName(l.address, l.displayName).toLowerCase() === v ||
+              l.address.toLowerCase().split("@")[0] === v,
+          );
+          s.label = hit?.address ?? value;
+          continue;
+        }
+        case "category":
+          if ((CATEGORIES as string[]).includes(v))
+            s.category = v as MailCategory;
+          else words.push(m[0]);
+          continue;
+        case "newer_than":
+          if (OLDER_NEWER[v]) s.within = OLDER_NEWER[v];
+          continue;
+        case "older_than":
+          if (v === "1y") s.within = "older1y";
+          continue;
+        default:
+          words.push(m[0]);
+          continue;
+      }
+    }
+    words.push(m[6] !== undefined ? `"${m[6]}"` : m[0]);
+  }
+  s.q = words.join(" ").trim();
+  if (!explicitFolder) s.folder = "all";
+  return s;
+}
+
+function quote(v: string) {
+  return /\s/.test(v) ? `"${v}"` : v;
+}
+
+/** The search-box text for a list state (inverse of parseSearchQuery). */
+export function stateToQuery(
+  s: ListState,
+  labels: Array<{ address: string; displayName?: string | null }> = [],
+): string {
+  const parts: string[] = [];
+  if (s.from) parts.push(`from:${quote(s.from)}`);
+  if (s.label) {
+    const l = labels.find((x) => x.address === s.label);
+    parts.push(
+      `label:${quote(l ? labelName(l.address, l.displayName).toLowerCase() : s.label)}`,
+    );
+  }
+  if (isSearch(s) || s.label) {
+    if (s.folder === "starred") parts.push("is:starred");
+    else if (s.folder === "snoozed") parts.push("is:snoozed");
+    else if (s.folder !== "all") parts.push(`in:${s.folder}`);
+  }
+  if (s.unread) parts.push("is:unread");
+  if (s.read) parts.push("is:read");
+  if (s.attachment) parts.push("has:attachment");
+  if (s.category) parts.push(`category:${s.category}`);
+  if (s.within === "older1y") parts.push("older_than:1y");
+  else if (s.within) parts.push(`newer_than:${s.within}`);
+  if (s.q) parts.push(s.q);
+  return parts.join(" ");
 }
 
 /* ── Colours ───────────────────────────────────────────────────────── */
@@ -219,6 +459,8 @@ export type ShortcutCommand =
   | "open"
   | "back"
   | "archive"
+  | "archiveOlder"
+  | "archiveNewer"
   | "star"
   | "delete"
   | "reply"
@@ -230,7 +472,25 @@ export type ShortcutCommand =
   | "markRead"
   | "markUnread"
   | "snooze"
-  | "help";
+  | "undo"
+  | "expandAll"
+  | "collapseAll"
+  | "nextMessage"
+  | "prevMessage"
+  | "moreActions"
+  | "help"
+  | "goInbox"
+  | "goStarred"
+  | "goSent"
+  | "goDrafts"
+  | "goArchive"
+  | "goSnoozed"
+  | "selectAll"
+  | "selectNone"
+  | "selectRead"
+  | "selectUnread"
+  | "selectStarred"
+  | "selectUnstarred";
 
 export interface KeyLike {
   key: string;
@@ -238,6 +498,49 @@ export interface KeyLike {
   metaKey?: boolean;
   ctrlKey?: boolean;
   altKey?: boolean;
+}
+
+export type ShortcutPrefix = "g" | "*";
+
+const G_MAP: Record<string, ShortcutCommand> = {
+  i: "goInbox",
+  s: "goStarred",
+  t: "goSent",
+  d: "goDrafts",
+  a: "goArchive",
+  b: "goSnoozed",
+};
+
+const STAR_MAP: Record<string, ShortcutCommand> = {
+  a: "selectAll",
+  n: "selectNone",
+  r: "selectRead",
+  u: "selectUnread",
+  s: "selectStarred",
+  t: "selectUnstarred",
+};
+
+/**
+ * Resolve a key press, given an optional pending prefix ("g" or "*").
+ * Returns the command, a new prefix to wait on, or nothing.
+ */
+export function resolveShortcut(
+  e: KeyLike,
+  prefix: ShortcutPrefix | null = null,
+): { cmd?: ShortcutCommand; prefix?: ShortcutPrefix } {
+  if (e.metaKey || e.ctrlKey || e.altKey) return {};
+  if (prefix === "g") {
+    const c = G_MAP[e.key.toLowerCase()];
+    return c ? { cmd: c } : {};
+  }
+  if (prefix === "*") {
+    const c = STAR_MAP[e.key.toLowerCase()];
+    return c ? { cmd: c } : {};
+  }
+  if (e.key === "g" && !e.shiftKey) return { prefix: "g" };
+  if (e.key === "*") return { prefix: "*" };
+  const cmd = shortcutFor(e);
+  return cmd ? { cmd } : {};
 }
 
 /** Gmail's single-key shortcuts. Returns null for anything else. */
@@ -253,6 +556,10 @@ export function shortcutFor(e: KeyLike): ShortcutCommand | null {
         return "delete";
       case "?":
         return "help";
+      case ":":
+        return "collapseAll";
+      case "*":
+        return null;
       case "Enter":
         return null;
     }
@@ -262,13 +569,23 @@ export function shortcutFor(e: KeyLike): ShortcutCommand | null {
       return "next";
     case "k":
       return "prev";
+    case "n":
+      return "nextMessage";
+    case "p":
+      return "prevMessage";
     case "o":
     case "Enter":
       return "open";
     case "u":
       return "back";
     case "e":
+    case "y":
+    case "m":
       return "archive";
+    case "]":
+      return "archiveOlder";
+    case "[":
+      return "archiveNewer";
     case "s":
       return "star";
     case "#":
@@ -287,6 +604,16 @@ export function shortcutFor(e: KeyLike): ShortcutCommand | null {
       return "select";
     case "b":
       return "snooze";
+    case "z":
+      return "undo";
+    case ";":
+      return "expandAll";
+    case ":":
+      return "collapseAll";
+    case ".":
+    case "v":
+    case "l":
+      return "moreActions";
     case "?":
       return "help";
   }
@@ -301,23 +628,61 @@ export function isTypingTarget(t: EventTarget | null): boolean {
   return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT";
 }
 
-export const SHORTCUT_HELP: Array<{ keys: string; label: string }> = [
-  { keys: "c", label: "Compose" },
-  { keys: "/", label: "Search mail" },
-  { keys: "j / k", label: "Newer / older conversation" },
-  { keys: "o or Enter", label: "Open conversation" },
-  { keys: "u", label: "Back to list" },
-  { keys: "x", label: "Select conversation" },
-  { keys: "s", label: "Star / unstar" },
-  { keys: "e", label: "Archive" },
-  { keys: "#", label: "Delete" },
-  { keys: "b", label: "Snooze" },
-  { keys: "Shift + I", label: "Mark as read" },
-  { keys: "Shift + U", label: "Mark as unread" },
-  { keys: "r", label: "Reply" },
-  { keys: "a", label: "Reply all" },
-  { keys: "f", label: "Forward" },
-  { keys: "?", label: "Show keyboard shortcuts" },
+export const SHORTCUT_HELP: Array<{
+  group: string;
+  items: Array<{ keys: string; label: string }>;
+}> = [
+  {
+    group: "Jumping",
+    items: [
+      { keys: "g then i", label: "Go to Inbox" },
+      { keys: "g then s", label: "Go to Starred" },
+      { keys: "g then b", label: "Go to Snoozed" },
+      { keys: "g then t", label: "Go to Sent" },
+      { keys: "g then d", label: "Go to Drafts" },
+      { keys: "g then a", label: "Go to Archive" },
+    ],
+  },
+  {
+    group: "Threadlist selection",
+    items: [
+      { keys: "* then a", label: "Select all conversations" },
+      { keys: "* then n", label: "Deselect all" },
+      { keys: "* then r", label: "Select read" },
+      { keys: "* then u", label: "Select unread" },
+      { keys: "* then s", label: "Select starred" },
+      { keys: "* then t", label: "Select unstarred" },
+    ],
+  },
+  {
+    group: "Navigation",
+    items: [
+      { keys: "j / k", label: "Older / newer conversation" },
+      { keys: "o or Enter", label: "Open conversation" },
+      { keys: "u", label: "Back to list" },
+      { keys: "n / p", label: "Next / previous message" },
+      { keys: "; / :", label: "Expand / collapse all messages" },
+      { keys: "/", label: "Search mail" },
+      { keys: "?", label: "Keyboard shortcuts" },
+    ],
+  },
+  {
+    group: "Actions",
+    items: [
+      { keys: "c", label: "Compose" },
+      { keys: "r / a / f", label: "Reply / reply all / forward" },
+      { keys: "x", label: "Select conversation" },
+      { keys: "s", label: "Star / unstar" },
+      { keys: "e", label: "Archive" },
+      { keys: "] / [", label: "Archive and go older / newer" },
+      { keys: "#", label: "Delete" },
+      { keys: "b", label: "Snooze" },
+      { keys: "Shift + I / U", label: "Mark as read / unread" },
+      { keys: ". or v", label: "More actions" },
+      { keys: "z", label: "Undo last action" },
+      { keys: "Ctrl + Enter", label: "Send (in a reply)" },
+    ],
+  },
 ];
 
 /** "1–50 of 230" */
@@ -326,4 +691,11 @@ export function rangeLabel(page: number, pageSize: number, total: number) {
   const start = (page - 1) * pageSize + 1;
   const end = Math.min(total, page * pageSize);
   return `${start.toLocaleString()}–${end.toLocaleString()} of ${total.toLocaleString()}`;
+}
+
+/** Recent searches (most recent first, unique, capped). */
+export function pushRecent(list: string[], q: string, cap = 8): string[] {
+  const t = q.trim();
+  if (!t) return list;
+  return [t, ...list.filter((x) => x !== t)].slice(0, cap);
 }

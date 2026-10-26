@@ -12,8 +12,11 @@ import {
   ArrowLeft,
   ChevronLeft,
   ChevronRight,
+  ChevronsDownUp,
+  ChevronsUpDown,
   Clock,
   Code,
+  ExternalLink,
   EllipsisVertical,
   Forward,
   Inbox as InboxIcon,
@@ -21,6 +24,7 @@ import {
   Mail,
   Paperclip,
   Pin,
+  Printer,
   Reply,
   ReplyAll,
   ShieldBan,
@@ -29,7 +33,9 @@ import {
 } from "lucide-react";
 import {
   addBlock,
+  deleteEmail,
   fetchConversationEmails,
+  markEmailRead,
   fetchPersonEmails,
   type Email,
   type GroupedItem,
@@ -59,8 +65,10 @@ import {
   type ConversationHandle,
   type RowActions,
 } from "./actions";
+import { InlineComposer, type InlineMode } from "./InlineComposer";
 import {
   Avatar,
+  ConfirmDialog,
   GmMenu,
   GmMenuItem,
   GmMenuSep,
@@ -100,6 +108,36 @@ interface Party {
   email: string;
 }
 
+/** Print messages in a clean window, like Gmail's "Print all". */
+function printEmails(list: Email[], subject: string) {
+  const w = window.open("", "_blank", "width=820,height=900");
+  if (!w) return;
+  const parts = list
+    .map((e) => {
+      const who =
+        e.type === "sent"
+          ? `${e.fromAddress ?? ""} → ${e.toAddress ?? ""}`
+          : `${e.fromAddress ?? ""} → ${e.recipient ?? ""}`;
+      const body = e.bodyHtml
+        ? sanitizeEmailHtml(e.bodyHtml)
+        : `<pre>${escapeHtml(e.bodyText ?? "")}</pre>`;
+      return `<section><div class="h"><b>${escapeHtml(who)}</b><span>${escapeHtml(
+        formatFullDate(e.timestamp),
+      )}</span></div><div class="s">${escapeHtml(e.subject ?? "")}</div>${body}</section>`;
+    })
+    .join("");
+  w.document.write(
+    `<!doctype html><html><head><meta charset="utf-8"><title>${escapeHtml(
+      subject,
+    )}</title><style>body{font:14px/1.5 Roboto,Arial,sans-serif;color:#202124;margin:32px}h1{font-size:20px;font-weight:400;border-bottom:1px solid #ccc;padding-bottom:8px}section{border-bottom:1px solid #e0e0e0;padding:12px 0}.h{display:flex;justify-content:space-between;font-size:13px}.s{color:#5f6368;font-size:12px;margin-bottom:8px}img{max-width:100%}pre{white-space:pre-wrap;font:inherit}</style></head><body><h1>${escapeHtml(
+      subject,
+    )}</h1>${parts}</body></html>`,
+  );
+  w.document.close();
+  w.focus();
+  window.setTimeout(() => w.print(), 300);
+}
+
 /* ── Message card ──────────────────────────────────────────────────── */
 
 function MessageCard({
@@ -108,18 +146,27 @@ function MessageCard({
   expanded,
   onToggle,
   onReply,
+  onReplyAll,
   onForward,
   onViewOriginal,
+  onDelete,
+  onMarkUnreadFrom,
   mobile,
+  cursor,
 }: {
   email: Email;
   sender: Party;
   expanded: boolean;
   onToggle: () => void;
   onReply: () => void;
+  onReplyAll: () => void;
   onForward: () => void;
   onViewOriginal: () => void;
+  onDelete: () => void;
+  onMarkUnreadFrom: () => void;
   mobile: boolean;
+  /** Keyboard message cursor (n / p). */
+  cursor?: boolean;
 }) {
   const isSent = email.type === "sent";
   const unread = email.type === "received" && email.isRead === 0;
@@ -150,6 +197,7 @@ function MessageCard({
           pad,
         )}
         data-testid="gmail-message-collapsed"
+        data-cursor={cursor ? "true" : undefined}
       >
         <Avatar name={sender.name} email={sender.email} size={40} />
         <div className="min-w-0 flex-1">
@@ -180,6 +228,8 @@ function MessageCard({
       className={cn("scroll-mt-4 border-t border-border pb-4 pt-4", pad)}
       data-testid="gmail-message"
       data-email-id={email.id}
+      data-cursor={cursor ? "true" : undefined}
+      tabIndex={-1}
     >
       <div className="flex items-start gap-3">
         <Avatar name={sender.name} email={sender.email} size={40} />
@@ -256,10 +306,33 @@ function MessageCard({
                   <GmMenuItem icon={<Reply size={20} />} onSelect={onReply}>
                     Reply
                   </GmMenuItem>
+                  <GmMenuItem
+                    icon={<ReplyAll size={20} />}
+                    onSelect={onReplyAll}
+                  >
+                    Reply all
+                  </GmMenuItem>
                   <GmMenuItem icon={<Forward size={20} />} onSelect={onForward}>
                     Forward
                   </GmMenuItem>
                   <GmMenuSep />
+                  <GmMenuItem icon={<Trash2 size={20} />} onSelect={onDelete}>
+                    Delete this message
+                  </GmMenuItem>
+                  {email.type === "received" && (
+                    <GmMenuItem
+                      icon={<Mail size={20} />}
+                      onSelect={onMarkUnreadFrom}
+                    >
+                      Mark unread from here
+                    </GmMenuItem>
+                  )}
+                  <GmMenuItem
+                    icon={<Printer size={20} />}
+                    onSelect={() => printEmails([email], email.subject ?? "")}
+                  >
+                    Print
+                  </GmMenuItem>
                   <GmMenuItem
                     icon={<Code size={20} />}
                     onSelect={onViewOriginal}
@@ -344,6 +417,12 @@ interface Props {
   /** Message id from a #m= deep link to expand and scroll to. */
   focusMessageId?: string | null;
   labelFilter?: string | null;
+  /** Start a reply / forward once loaded (from the row menu). */
+  initialAction?: InlineMode | null;
+  onActionDone?: () => void;
+  /** "Back to Inbox" etc. */
+  backLabel?: string;
+  onOpenNewWindow?: () => void;
 }
 
 export default function Conversation({
@@ -360,6 +439,10 @@ export default function Conversation({
   handleRef,
   onChanged,
   focusMessageId,
+  initialAction,
+  onActionDone,
+  backLabel = "Back to list",
+  onOpenNewWindow,
 }: Props) {
   const { data: session } = useSession();
   const me = session?.user;
@@ -373,6 +456,12 @@ export default function Conversation({
     all: boolean;
   } | null>(null);
   const [original, setOriginal] = useState<Email | null>(null);
+  const [inline, setInline] = useState<{
+    mode: InlineMode;
+    targetId: string;
+  } | null>(null);
+  const [msgCursor, setMsgCursor] = useState(-1);
+  const [deleting, setDeleting] = useState<Email | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const markedRef = useRef<string | null>(null);
 
@@ -417,6 +506,8 @@ export default function Conversation({
     setError(null);
     setShowAll(false);
     setReplyTo(null);
+    setInline(null);
+    setMsgCursor(-1);
     load()
       .then((r) => {
         if (cancelled) return;
@@ -514,11 +605,30 @@ export default function Conversation({
 
   const startReply = (target: Email | null, all = false) => {
     if (!target) return;
-    setReplyTo({ id: target.id, all });
+    if (mobile) setReplyTo({ id: target.id, all });
+    else setInline({ mode: all ? "replyAll" : "reply", targetId: target.id });
+  };
+
+  const forwardHtmlFor = (target: Email) => {
+    const s = senderOf(target);
+    const header =
+      `<p></p><p>---------- Forwarded message ---------<br>` +
+      `From: ${escapeHtml(s.name ? `${s.name} <${s.email}>` : s.email)}<br>` +
+      `Date: ${escapeHtml(formatFullDate(target.timestamp))}<br>` +
+      `Subject: ${escapeHtml(target.subject ?? "")}<br>` +
+      `To: ${escapeHtml((target.type === "sent" ? target.toAddress : target.recipient) ?? "")}</p>`;
+    const body = target.bodyHtml
+      ? sanitizeEmailHtml(target.bodyHtml)
+      : `<p>${escapeHtml(target.bodyText ?? "").replace(/\n/g, "<br>")}</p>`;
+    return `${header}${body}`;
   };
 
   const forward = (target: Email | null) => {
     if (!target) return;
+    if (!mobile) {
+      setInline({ mode: "forward", targetId: target.id });
+      return;
+    }
     const s = senderOf(target);
     const header =
       `<br><br><div>---------- Forwarded message ---------<br>` +
@@ -541,11 +651,89 @@ export default function Conversation({
   const replyTarget = latestReceived ?? latest;
   const hasCc = !!replyTarget?.cc?.length;
 
+  const expandAll = () => {
+    setShowAll(true);
+    setExpanded(new Set((emails ?? []).map((e) => e.id)));
+  };
+  const collapseAll = () => {
+    setExpanded(new Set());
+  };
+  const allExpanded =
+    !!emails?.length && emails.every((e) => expanded.has(e.id));
+
+  const moveMsg = (delta: number) => {
+    const list = emails ?? [];
+    if (!list.length) return;
+    setShowAll(true);
+    const next = Math.min(
+      list.length - 1,
+      Math.max(0, (msgCursor < 0 ? list.length - 1 : msgCursor) + delta),
+    );
+    setMsgCursor(next);
+    requestAnimationFrame(() => {
+      const el = document.getElementById(messageDomId(list[next].id));
+      el?.scrollIntoView({ block: "nearest" });
+      el?.focus({ preventScroll: true });
+    });
+  };
+
+  // Row menu "Reply / Reply all / Forward" opens the conversation and
+  // starts the action once the messages are here.
+  const actionDone = useRef(false);
+  useEffect(() => {
+    if (!initialAction || !emails || actionDone.current) return;
+    actionDone.current = true;
+    if (initialAction === "forward") forward(latest);
+    else startReply(replyTarget, initialAction === "replyAll");
+    onActionDone?.();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialAction, emails]);
+
+  const deleteMessage = async (e: Email) => {
+    try {
+      await deleteEmail(e.id);
+      showToast({ kind: "success", message: "Message deleted forever" });
+      if ((emails?.length ?? 0) <= 1) {
+        onChanged();
+        onBack();
+        return;
+      }
+      refetch();
+      onChanged();
+    } catch (err) {
+      showToast({
+        kind: "error",
+        message: err instanceof Error ? err.message : "Could not delete",
+      });
+    }
+  };
+
+  const markUnreadFrom = async (e: Email) => {
+    const targets = (emails ?? []).filter(
+      (x) => x.type === "received" && x.timestamp >= e.timestamp,
+    );
+    try {
+      await Promise.all(targets.map((x) => markEmailRead(x.id, false)));
+      showToast({ kind: "info", message: "Marked unread from here" });
+      onChanged();
+      onBack();
+    } catch (err) {
+      showToast({
+        kind: "error",
+        message: err instanceof Error ? err.message : "Could not mark unread",
+      });
+    }
+  };
+
   if (handleRef) {
     handleRef.current = {
       reply: () => startReply(replyTarget),
       replyAll: () => startReply(replyTarget, true),
       forward: () => forward(latest),
+      expandAll,
+      collapseAll,
+      nextMessage: () => moveMsg(1),
+      prevMessage: () => moveMsg(-1),
     };
   }
 
@@ -673,7 +861,7 @@ export default function Conversation({
   ) : (
     <div className="flex h-12 flex-none items-center gap-1 px-2">
       {!pane &&
-        tb("Back to list", <ArrowLeft size={20} />, onBack, {
+        tb(backLabel, <ArrowLeft size={20} />, onBack, {
           testId: "gmail-back",
         })}
       <span className="mx-1" />
@@ -776,6 +964,45 @@ export default function Conversation({
             {subject}
           </h2>
           {labelChips}
+          {!mobile && (
+            <div className="ml-auto flex flex-none items-center gap-0.5">
+              <button
+                type="button"
+                className="gm-icon-btn gm-sm"
+                aria-label={allExpanded ? "Collapse all" : "Expand all"}
+                title={allExpanded ? "Collapse all (:)" : "Expand all (;)"}
+                onClick={allExpanded ? collapseAll : expandAll}
+                data-testid="gmail-expand-all"
+              >
+                {allExpanded ? (
+                  <ChevronsDownUp size={18} />
+                ) : (
+                  <ChevronsUpDown size={18} />
+                )}
+              </button>
+              <button
+                type="button"
+                className="gm-icon-btn gm-sm"
+                aria-label="Print all"
+                title="Print all"
+                onClick={() => printEmails(emails ?? [], subject)}
+                data-testid="gmail-print"
+              >
+                <Printer size={18} />
+              </button>
+              {onOpenNewWindow && (
+                <button
+                  type="button"
+                  className="gm-icon-btn gm-sm"
+                  aria-label="In new window"
+                  title="In new window"
+                  onClick={onOpenNewWindow}
+                >
+                  <ExternalLink size={18} />
+                </button>
+              )}
+            </div>
+          )}
           {mobile && (
             <button
               type="button"
@@ -840,14 +1067,69 @@ export default function Conversation({
               expanded={expanded.has(v.id)}
               onToggle={() => toggle(v.id)}
               onReply={() => startReply(v)}
+              onReplyAll={() => startReply(v, true)}
               onForward={() => forward(v)}
               onViewOriginal={() => setOriginal(v)}
+              onDelete={() => setDeleting(v)}
+              onMarkUnreadFrom={() => void markUnreadFrom(v)}
               mobile={mobile}
+              cursor={msgCursor >= 0 && list[msgCursor]?.id === v.id}
             />
           ),
         )}
 
-        {emails && emails.length > 0 && !mobile && (
+        {inline &&
+          !mobile &&
+          (() => {
+            const target =
+              list.find((e) => e.id === inline.targetId) ?? replyTarget;
+            if (!target) return null;
+            const party = counterpart(target);
+            return (
+              <div className="border-t border-border py-4 pl-4 pr-6">
+                <InlineComposer
+                  key={`${target.id}:${inline.mode === "forward" ? "f" : "r"}`}
+                  mode={inline.mode}
+                  target={target}
+                  party={party}
+                  inboxes={inboxes}
+                  identities={identities}
+                  internalDomains={internalDomains}
+                  subject={cleanSubject(target.subject ?? subject)}
+                  forwardHtml={forwardHtmlFor(target)}
+                  meName={me?.name}
+                  meEmail={me?.email}
+                  onModeChange={(m) =>
+                    setInline({ mode: m, targetId: target.id })
+                  }
+                  onClose={() => setInline(null)}
+                  onSent={() => {
+                    refetch();
+                    onChanged();
+                  }}
+                  onPopOut={(cur) => {
+                    setInline(null);
+                    if (inline.mode === "forward") {
+                      onCompose({
+                        from: inboxOf(target) ?? undefined,
+                        to: cur.to || undefined,
+                        cc: cur.cc,
+                        subject: `Fwd: ${cleanSubject(target.subject ?? subject)}`,
+                        bodyHtml: cur.bodyHtml,
+                      });
+                    } else {
+                      setReplyTo({
+                        id: target.id,
+                        all: inline.mode === "replyAll",
+                      });
+                    }
+                  }}
+                />
+              </div>
+            );
+          })()}
+
+        {emails && emails.length > 0 && !mobile && !inline && (
           <div className="flex flex-wrap gap-3 border-t border-border py-5 pl-[68px] pr-6">
             <button
               type="button"
@@ -931,6 +1213,15 @@ export default function Conversation({
             />
           );
         })()}
+
+      <ConfirmDialog
+        open={!!deleting}
+        title="Delete this message forever?"
+        body="This permanently deletes the message and its attachments. There is no trash, so this can't be undone."
+        confirmLabel="Delete forever"
+        onConfirm={() => deleting && void deleteMessage(deleting)}
+        onClose={() => setDeleting(null)}
+      />
 
       <EmailHtmlModal
         email={original}

@@ -70,10 +70,13 @@ describe("list state in the URL", () => {
   });
   it("maps drafts and sequenced to list filters", () => {
     expect(
-      folderQuery(parseListState(new URLSearchParams("folder=drafts"))),
+      folderQuery(parseListState(new URLSearchParams("folder=drafts")), false),
     ).toEqual({ folder: "all", drafts: true });
     expect(
-      folderQuery(parseListState(new URLSearchParams("folder=sequenced"))),
+      folderQuery(
+        parseListState(new URLSearchParams("folder=sequenced")),
+        false,
+      ),
     ).toEqual({ folder: "all", sequenced: true });
   });
   it("encodes the open conversation", () => {
@@ -97,7 +100,7 @@ describe("shortcutFor", () => {
   it("ignores modified keys", () => {
     expect(shortcutFor({ key: "c", metaKey: true })).toBeNull();
     expect(shortcutFor({ key: "r", ctrlKey: true })).toBeNull();
-    expect(shortcutFor({ key: "z" })).toBeNull();
+    expect(shortcutFor({ key: "q" })).toBeNull();
   });
   it("detects typing targets", () => {
     const input = document.createElement("input");

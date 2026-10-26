@@ -29,6 +29,16 @@ export function EmptyState({
     title = "No messages matched your search";
     body =
       "Try different words, or use search options to look by sender, inbox or unread mail.";
+  } else if (state.folder === "inbox" && state.tab && state.tab !== "primary") {
+    icon = <Tag size={40} />;
+    title = `Your ${state.tab[0].toUpperCase()}${state.tab.slice(1)} tab is empty`;
+    body = {
+      promotions: "Deals, offers and other marketing mail will show up here.",
+      social:
+        "Messages from social networks and media-sharing sites will show up here.",
+      updates:
+        "Receipts, confirmations, bills and other automated notifications will show up here.",
+    }[state.tab];
   } else if (state.label) {
     icon = <Tag size={40} />;
     title = "There are no conversations with this label";
