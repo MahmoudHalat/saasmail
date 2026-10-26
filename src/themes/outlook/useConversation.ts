@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   fetchConversationEmails,
   fetchPersonEmails,
@@ -17,9 +17,14 @@ export function useConversation(item: GroupedItem | null, label?: string) {
   const [error, setError] = useState<string | null>(null);
   const type = item?.type;
   const id = item?.id;
+  // Only the newest request may write state. Without this, a slow response
+  // for the previous conversation could land after the user switched, and a
+  // reply typed under one person's header would go to another's email.
+  const reqId = useRef(0);
 
   const load = useCallback(
     async (silent = false) => {
+      const req = ++reqId.current;
       if (!type || !id) {
         setEmails([]);
         return;
@@ -31,12 +36,14 @@ export function useConversation(item: GroupedItem | null, label?: string) {
             ? (await fetchPersonEmails(id, { recipient: label, limit: 100 }))
                 .emails
             : (await fetchConversationEmails(id)).emails;
+        if (req !== reqId.current) return;
         setEmails([...list].sort((a, b) => b.timestamp - a.timestamp));
         setError(null);
       } catch (e) {
+        if (req !== reqId.current) return;
         setError(e instanceof Error ? e.message : "Could not load messages");
       } finally {
-        if (!silent) setLoading(false);
+        if (!silent && req === reqId.current) setLoading(false);
       }
     },
     [type, id, label],

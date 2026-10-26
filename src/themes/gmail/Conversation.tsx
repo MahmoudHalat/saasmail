@@ -392,9 +392,15 @@ export default function Conversation({
     }
   }, [item.type, item.id]);
 
+  // A refetch started for one conversation must not land on another
+  // (a reply would then target the wrong person's email).
+  const currentKey = useRef("");
+  currentKey.current = `${item.type}:${item.id}`;
   const refetch = useCallback(() => {
+    const startedFor = currentKey.current;
     load()
       .then((r) => {
+        if (startedFor !== currentKey.current) return;
         setEmails([...r.emails].sort((a, b) => a.timestamp - b.timestamp));
         setParticipants(r.participants);
       })
