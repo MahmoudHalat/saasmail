@@ -1,6 +1,15 @@
-import InboxPage from "@/pages/InboxPage";
+import { useIsMobile } from "./context";
+import DesktopMail from "./DesktopMail";
+import MobileMail from "./MobileMail";
+import { useOutlookMail } from "./useOutlookMail";
 
-/** Placeholder until the Outlook inbox lands. */
+/**
+ * Outlook mail module. Desktop: ribbon, folder pane, message list and
+ * reading pane. Phones: the Outlook mobile app (Focused/Other, swipe
+ * actions, full-screen conversation and compose).
+ */
 export default function OutlookInbox() {
-  return <InboxPage />;
+  const mail = useOutlookMail();
+  const isMobile = useIsMobile();
+  return isMobile ? <MobileMail mail={mail} /> : <DesktopMail mail={mail} />;
 }
