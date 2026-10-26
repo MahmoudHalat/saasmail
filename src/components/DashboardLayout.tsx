@@ -10,6 +10,11 @@ import { useReducedAnimations } from "@/hooks/useReducedAnimations";
 import { useBranding } from "@/lib/branding";
 import { WebMcpBridgeProvider } from "@/webmcp/bridge";
 import { WebMcpTools } from "@/webmcp/registerTools";
+import { lazy, Suspense } from "react";
+import { useUiTheme } from "@/lib/preferences";
+
+const GmailShell = lazy(() => import("@/themes/gmail/GmailShell"));
+const OutlookShell = lazy(() => import("@/themes/outlook/OutlookShell"));
 
 export default function DashboardLayout() {
   const navigate = useNavigate();
@@ -21,6 +26,7 @@ export default function DashboardLayout() {
     null,
   );
   const reduced = useReducedAnimations();
+  const ui = useUiTheme();
 
   const openCompose = useCallback((prefill?: ComposePrefill) => {
     setComposePrefill(prefill ?? null);
@@ -35,41 +41,60 @@ export default function DashboardLayout() {
   return (
     <WebMcpBridgeProvider navigate={navigate} openCompose={openCompose}>
       {webmcpEnabled && <WebMcpTools />}
-      <div className="relative flex min-h-screen flex-col bg-background pt-16">
-        {/* Faded gradient backdrop. Animates by default; falls back to a
-            static version on low-spec devices or when the user prefers
-            reduced motion. */}
-        <div
-          className={
-            reduced
-              ? "dashboard-backdrop dashboard-backdrop-static"
-              : "dashboard-backdrop"
-          }
-          aria-hidden
-        />
-        <div className="dashboard-backdrop-mask" aria-hidden />
+      {ui === "default" ? (
+        <div className="relative flex min-h-screen flex-col bg-background pt-16">
+          {/* Faded gradient backdrop. Animates by default; falls back to a
+              static version on low-spec devices or when the user prefers
+              reduced motion. */}
+          <div
+            className={
+              reduced
+                ? "dashboard-backdrop dashboard-backdrop-static"
+                : "dashboard-backdrop"
+            }
+            aria-hidden
+          />
+          <div className="dashboard-backdrop-mask" aria-hidden />
 
-        <TopNav />
-        <Breadcrumbs />
+          <TopNav />
+          <Breadcrumbs />
 
-        <main className="relative z-10 flex min-h-0 flex-1 flex-col">
-          <Outlet context={{ onCompose: openCompose }} />
-        </main>
+          <main className="relative z-10 flex min-h-0 flex-1 flex-col">
+            <Outlet context={{ onCompose: openCompose }} />
+          </main>
 
-        <div className="relative z-10">
-          <Footer />
+          <div className="relative z-10">
+            <Footer />
+          </div>
+
+          <ComposeFab onClick={() => openCompose()} />
+
+          <ComposeModal
+            open={composeOpen}
+            onClose={closeCompose}
+            prefill={composePrefill}
+          />
+
+          <Toaster />
         </div>
-
-        <ComposeFab onClick={() => openCompose()} />
-
-        <ComposeModal
-          open={composeOpen}
-          onClose={closeCompose}
-          prefill={composePrefill}
-        />
-
-        <Toaster />
-      </div>
+      ) : (
+        <Suspense fallback={null}>
+          {(() => {
+            const Shell = ui === "gmail" ? GmailShell : OutlookShell;
+            return (
+              <Shell onCompose={openCompose}>
+                <Outlet context={{ onCompose: openCompose }} />
+              </Shell>
+            );
+          })()}
+          <ComposeModal
+            open={composeOpen}
+            onClose={closeCompose}
+            prefill={composePrefill}
+          />
+          <Toaster />
+        </Suspense>
+      )}
     </WebMcpBridgeProvider>
   );
 }

@@ -18,6 +18,7 @@ import SelectionBar from "@/components/SelectionBar";
 import AgentPlan from "@/components/AgentPlan";
 import {
   addBlock,
+  EMPTY_MAIL_ROW_STATE,
   defaultDirectionFor,
   fetchPerson,
   fetchStats,
@@ -399,6 +400,7 @@ export default function InboxPage() {
       .then((p) => {
         if (cancelled) return;
         setSelectedPerson({
+          ...EMPTY_MAIL_ROW_STATE,
           type: "person",
           id: p.id,
           email: p.email,

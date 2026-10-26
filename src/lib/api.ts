@@ -22,6 +22,16 @@ export interface GroupedPerson {
   recipientCount: number;
   recipients: string[];
   hasAttachment: number;
+  /** Per-user mail state and list-row extras (see mail_item_states). */
+  starred: boolean;
+  pinned: boolean;
+  /** Unix seconds; set only while the row is archived. */
+  archivedAt: number | null;
+  /** Unix seconds; set only while the row is snoozed. */
+  snoozedUntil: number | null;
+  hasSent: boolean;
+  latestSubject: string | null;
+  snippet: string | null;
 }
 
 /**
@@ -47,7 +57,28 @@ export interface GroupedConversation {
   unreadCount: number;
   totalCount: number;
   hasAttachment: number;
+  /** Per-user mail state and list-row extras (see mail_item_states). */
+  starred: boolean;
+  pinned: boolean;
+  /** Unix seconds; set only while the row is archived. */
+  archivedAt: number | null;
+  /** Unix seconds; set only while the row is snoozed. */
+  snoozedUntil: number | null;
+  hasSent: boolean;
+  latestSubject: string | null;
+  snippet: string | null;
 }
+
+/** Row state for a grouped item built on the client (not from the list). */
+export const EMPTY_MAIL_ROW_STATE = {
+  starred: false,
+  pinned: false,
+  archivedAt: null,
+  snoozedUntil: null,
+  hasSent: false,
+  latestSubject: null,
+  snippet: null,
+} as const;
 
 /** Discriminated union — anything that shows up in the inbox sidebar/table. */
 export type GroupedItem = GroupedPerson | GroupedConversation;
@@ -204,12 +235,77 @@ export function defaultDirectionFor(key: InboxSort): InboxSortDirection {
   return key === "inbox" ? "asc" : "desc";
 }
 
+export type MailFolder =
+  | "all"
+  | "inbox"
+  | "starred"
+  | "snoozed"
+  | "archive"
+  | "sent";
+
+export type MailItemRef = { type: "person" | "group"; id: string };
+
+export interface MailItemState {
+  type: "person" | "group";
+  id: string;
+  starred: boolean;
+  pinned: boolean;
+  archivedAt: number | null;
+  snoozedUntil: number | null;
+}
+
+/**
+ * Star, pin, archive or snooze inbox rows for the signed-in user.
+ * `snoozedUntil` is unix seconds; null wakes the row.
+ */
+export async function updateMailState(
+  items: MailItemRef[],
+  patch: {
+    starred?: boolean;
+    pinned?: boolean;
+    archived?: boolean;
+    snoozedUntil?: number | null;
+  },
+): Promise<{ data: MailItemState[] }> {
+  return apiFetch(`/api/mail-state`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ items, ...patch }),
+  });
+}
+
+export type UiTheme = "default" | "gmail" | "outlook";
+export type ColorMode = "light" | "dark" | "system";
+export type Density = "comfortable" | "compact";
+
+export interface UserPreferences {
+  uiTheme: UiTheme;
+  colorMode: ColorMode;
+  density: Density;
+}
+
+export async function fetchPreferences(): Promise<UserPreferences> {
+  return apiFetch(`/api/user/preferences`);
+}
+
+export async function updatePreferences(
+  patch: Partial<UserPreferences>,
+): Promise<UserPreferences> {
+  return apiFetch(`/api/user/preferences`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(patch),
+  });
+}
+
 export async function fetchGroupedPeople(params?: {
   q?: string;
   recipient?: string;
   unread?: boolean;
   drafts?: boolean;
   sequenced?: boolean;
+  /** Mail folder; omitted means "all" (ignores star/archive/snooze). */
+  folder?: MailFolder;
   sort?: InboxSort;
   /** Optional explicit direction. Server applies the natural default if omitted. */
   direction?: InboxSortDirection;
@@ -222,6 +318,8 @@ export async function fetchGroupedPeople(params?: {
   if (params?.unread) qs.set("unread", "1");
   if (params?.drafts) qs.set("drafts", "1");
   if (params?.sequenced) qs.set("sequenced", "1");
+  if (params?.folder && params.folder !== "all")
+    qs.set("folder", params.folder);
   if (params?.sort && params.sort !== "recency") qs.set("sort", params.sort);
   // Only send direction when it differs from the natural default —
   // keeps the URL stable for the common case and avoids cache-busting.
