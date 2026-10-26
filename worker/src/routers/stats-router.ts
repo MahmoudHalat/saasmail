@@ -17,6 +17,8 @@ const StatsSchema = z.object({
   totalEmails: z.number(),
   unreadCount: z.number(),
   recipients: z.array(z.string()),
+  /** Unread received emails per inbox address, for folder/label counts. */
+  inboxUnread: z.record(z.string(), z.number()),
   senderIdentities: z.array(
     z.object({
       email: z.string(),
@@ -78,6 +80,17 @@ statsRouter.openapi(statsRoute, async (c) => {
           : sql`${people.id} IN (SELECT person_id FROM ${emails} WHERE ${emails.recipient} IN ${allowed.inboxes})`,
     );
 
+  const perInbox = await db
+    .select({
+      inbox: emails.recipient,
+      unread: sql<number>`SUM(CASE WHEN ${emails.isRead} = 0 THEN 1 ELSE 0 END)`,
+    })
+    .from(emails)
+    .where(scopeFilter ?? sql`1=1`)
+    .groupBy(emails.recipient);
+  const inboxUnread: Record<string, number> = {};
+  for (const r of perInbox) inboxUnread[r.inbox] = Number(r.unread ?? 0);
+
   const allIdentities = await db.select().from(senderIdentities);
   const identityRows = allowed.isAdmin
     ? allIdentities
@@ -89,6 +102,7 @@ statsRouter.openapi(statsRoute, async (c) => {
       totalEmails,
       unreadCount,
       recipients: identityRows.map((r) => r.email),
+      inboxUnread,
       senderIdentities: identityRows.map((r) => ({
         email: r.email,
         displayName: r.displayName,

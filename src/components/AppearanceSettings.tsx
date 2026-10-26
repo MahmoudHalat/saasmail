@@ -1,6 +1,6 @@
 import { Check, Monitor, Moon, Rows3, Rows4, Sun } from "lucide-react";
 import { usePreferences } from "@/lib/preferences";
-import type { ColorMode, Density, UiTheme } from "@/lib/api";
+import type { ColorMode, Density, Palette, UiTheme } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
 const LAYOUTS: Array<{ id: UiTheme; label: string; blurb: string }> = [
@@ -30,6 +30,22 @@ const MODES: Array<{ id: ColorMode; label: string; icon: typeof Sun }> = [
 const DENSITIES: Array<{ id: Density; label: string; icon: typeof Rows3 }> = [
   { id: "comfortable", label: "Comfortable", icon: Rows3 },
   { id: "compact", label: "Compact", icon: Rows4 },
+];
+
+/** Swatches show the chrome and the accent of each default-layout palette. */
+const PALETTE_OPTIONS: Array<{
+  id: Palette;
+  label: string;
+  chrome: string;
+  accent: string;
+}> = [
+  { id: "navy", label: "Navy", chrome: "#16203a", accent: "#3730a3" },
+  { id: "ink", label: "Ink", chrome: "#101113", accent: "#18181b" },
+  { id: "slate", label: "Slate", chrome: "#1e242b", accent: "#0e7490" },
+  { id: "indigo", label: "Indigo", chrome: "#241f52", accent: "#4f46e5" },
+  { id: "forest", label: "Forest", chrome: "#122a1f", accent: "#15803d" },
+  { id: "claret", label: "Claret", chrome: "#2c1419", accent: "#be123c" },
+  { id: "paper", label: "Paper", chrome: "#dee2ea", accent: "#3730a3" },
 ];
 
 function Thumb({ id }: { id: UiTheme }) {
@@ -120,7 +136,8 @@ function Thumb({ id }: { id: UiTheme }) {
  * usePreferences, so the choice follows the user across devices.
  */
 export default function AppearanceSettings() {
-  const { uiTheme, colorMode, density, setPreferences } = usePreferences();
+  const { uiTheme, colorMode, density, palette, setPreferences } =
+    usePreferences();
 
   return (
     <section id="appearance" className="scroll-mt-6">
@@ -183,6 +200,53 @@ export default function AppearanceSettings() {
             );
           })}
         </div>
+
+        {uiTheme === "default" && (
+          <div className="mt-5 border-t border-border pt-5">
+            <p className="font-label mb-2 text-text-tertiary">Colour theme</p>
+            <div
+              className="flex flex-wrap gap-2"
+              role="radiogroup"
+              aria-label="Colour theme"
+            >
+              {PALETTE_OPTIONS.map((p) => {
+                const on = palette === p.id;
+                return (
+                  <button
+                    key={p.id}
+                    type="button"
+                    role="radio"
+                    aria-checked={on}
+                    onClick={() => setPreferences({ palette: p.id })}
+                    className={cn(
+                      "flex items-center gap-2 rounded-lg border bg-card py-1.5 pl-1.5 pr-3 text-[13px] font-medium transition-colors",
+                      on
+                        ? "border-accent text-text-primary ring-1 ring-accent"
+                        : "border-border text-text-secondary hover:border-border-strong hover:text-text-primary",
+                    )}
+                  >
+                    <span
+                      aria-hidden
+                      className="relative h-6 w-6 overflow-hidden rounded-md border border-border"
+                      style={{ background: p.chrome }}
+                    >
+                      <span
+                        className="absolute bottom-0.5 right-0.5 h-2.5 w-2.5 rounded-full"
+                        style={{ background: p.accent }}
+                      />
+                    </span>
+                    {p.label}
+                    {on && <Check className="h-3.5 w-3.5 text-accent" />}
+                  </button>
+                );
+              })}
+            </div>
+            <p className="mt-2 text-[12.5px] text-text-tertiary">
+              Each theme has a light and a dark version; it follows the colour
+              mode below.
+            </p>
+          </div>
+        )}
 
         <div className="mt-5 grid gap-5 border-t border-border pt-5 sm:grid-cols-2">
           <div>

@@ -12,6 +12,7 @@ import {
   updatePreferences,
   type ColorMode,
   type Density,
+  type Palette,
   type UiTheme,
   type UserPreferences,
 } from "@/lib/api";
@@ -59,7 +60,18 @@ const DEFAULTS: UserPreferences = {
   uiTheme: "default",
   colorMode: "system",
   density: "comfortable",
+  palette: "navy",
 };
+
+export const PALETTES: Palette[] = [
+  "navy",
+  "ink",
+  "slate",
+  "indigo",
+  "forest",
+  "claret",
+  "paper",
+];
 
 const UI_THEMES: UiTheme[] = ["default", "gmail", "outlook"];
 const COLOR_MODES: ColorMode[] = ["light", "dark", "system"];
@@ -77,6 +89,9 @@ function sanitize(raw: unknown): UserPreferences {
     density: DENSITIES.includes(r.density as Density)
       ? (r.density as Density)
       : DEFAULTS.density,
+    palette: PALETTES.includes(r.palette as Palette)
+      ? (r.palette as Palette)
+      : DEFAULTS.palette,
   };
 }
 
@@ -110,10 +125,23 @@ export function resolveMode(mode: ColorMode): "light" | "dark" {
 }
 
 /** Theme colour for the browser UI (address bar on mobile). */
-function themeColorFor(ui: UiTheme, mode: "light" | "dark"): string {
+function themeColorFor(
+  ui: UiTheme,
+  mode: "light" | "dark",
+  palette: Palette,
+): string {
   if (ui === "gmail") return mode === "dark" ? "#1b1b1b" : "#f6f8fc";
   if (ui === "outlook") return mode === "dark" ? "#0a2e4a" : "#0f6cbd";
-  return mode === "dark" ? "#0b0e13" : "#16203a";
+  const chrome: Record<Palette, [string, string]> = {
+    navy: ["#16203a", "#0b0e13"],
+    ink: ["#101113", "#09090b"],
+    slate: ["#1e242b", "#0d1116"],
+    indigo: ["#241f52", "#12102a"],
+    forest: ["#122a1f", "#08140f"],
+    claret: ["#2c1419", "#150a0d"],
+    paper: ["#dee2ea", "#16181d"],
+  };
+  return chrome[palette][mode === "dark" ? 1 : 0];
 }
 
 export function applyPreferencesToDocument(prefs: UserPreferences) {
@@ -122,8 +150,13 @@ export function applyPreferencesToDocument(prefs: UserPreferences) {
   root.dataset.ui = prefs.uiTheme;
   root.dataset.mode = mode;
   root.dataset.density = prefs.density;
+  root.dataset.palette = prefs.palette;
   const meta = document.querySelector('meta[name="theme-color"]');
-  if (meta) meta.setAttribute("content", themeColorFor(prefs.uiTheme, mode));
+  if (meta)
+    meta.setAttribute(
+      "content",
+      themeColorFor(prefs.uiTheme, mode, prefs.palette),
+    );
 }
 
 interface PreferencesContextValue extends UserPreferences {

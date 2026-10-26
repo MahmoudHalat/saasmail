@@ -344,6 +344,13 @@
       "when": 1793039906439,
       "tag": "0048_user_prefs_mail_states",
       "breakpoints": true
+    },
+    {
+      "idx": 49,
+      "version": "6",
+      "when": 1793048428762,
+      "tag": "0049_user_prefs_palette",
+      "breakpoints": true
     }
   ]
 }

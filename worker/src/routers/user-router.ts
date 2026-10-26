@@ -42,17 +42,28 @@ userRouter.openapi(passkeyStatusRoute, async (c) => {
 export const UI_THEMES = ["default", "gmail", "outlook"] as const;
 export const COLOR_MODES = ["light", "dark", "system"] as const;
 export const DENSITIES = ["comfortable", "compact"] as const;
+export const PALETTES = [
+  "navy",
+  "ink",
+  "slate",
+  "indigo",
+  "forest",
+  "claret",
+  "paper",
+] as const;
 
 const PreferencesSchema = z.object({
   uiTheme: z.enum(UI_THEMES),
   colorMode: z.enum(COLOR_MODES),
   density: z.enum(DENSITIES),
+  palette: z.enum(PALETTES),
 });
 
 const DEFAULT_PREFERENCES: z.infer<typeof PreferencesSchema> = {
   uiTheme: "default",
   colorMode: "system",
   density: "comfortable",
+  palette: "navy",
 };
 
 function readPreferences(
@@ -70,6 +81,7 @@ function readPreferences(
     uiTheme: pick(UI_THEMES, row?.uiTheme, DEFAULT_PREFERENCES.uiTheme),
     colorMode: pick(COLOR_MODES, row?.colorMode, DEFAULT_PREFERENCES.colorMode),
     density: pick(DENSITIES, row?.density, DEFAULT_PREFERENCES.density),
+    palette: pick(PALETTES, row?.palette, DEFAULT_PREFERENCES.palette),
   };
 }
 
@@ -78,7 +90,7 @@ const getPreferencesRoute = createRoute({
   path: "/preferences",
   tags: ["User"],
   description:
-    "The signed-in user's UI preferences (mail theme, colour mode, density).",
+    "The signed-in user's UI preferences (mail layout, colour mode, density, default-layout palette).",
   responses: {
     ...json200Response(PreferencesSchema, "Preferences, with defaults filled"),
   },

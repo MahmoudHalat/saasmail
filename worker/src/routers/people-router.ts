@@ -54,6 +54,8 @@ const GroupedPersonSchema = z.object({
   hasSent: z.boolean(),
   latestSubject: z.string().nullable(),
   snippet: z.string().nullable(),
+  /** Gmail-style category, from headers and sender (see categorize). */
+  category: z.enum(["primary", "promotions", "social", "updates"]),
 });
 
 // Group conversation row — represents a single multi-participant thread.
@@ -92,6 +94,8 @@ const GroupedConversationSchema = z.object({
   hasSent: z.boolean(),
   latestSubject: z.string().nullable(),
   snippet: z.string().nullable(),
+  /** Gmail-style category, from headers and sender (see categorize). */
+  category: z.enum(["primary", "promotions", "social", "updates"]),
 });
 
 const GroupedItemSchema = z.discriminatedUnion("type", [
@@ -107,7 +111,53 @@ const EMPTY_ROW_STATE = {
   hasSent: false,
   latestSubject: null as string | null,
   snippet: null as string | null,
+  category: "primary" as MailCategory,
 };
+
+type MailCategory = "primary" | "promotions" | "social" | "updates";
+
+const SOCIAL_DOMAINS = [
+  "facebook.com",
+  "facebookmail.com",
+  "linkedin.com",
+  "twitter.com",
+  "x.com",
+  "instagram.com",
+  "tiktok.com",
+  "reddit.com",
+  "redditmail.com",
+  "pinterest.com",
+  "youtube.com",
+  "discord.com",
+  "slack.com",
+  "meetup.com",
+];
+const AUTOMATED_LOCAL =
+  /^(no-?reply|do-?not-?reply|notifications?|alerts?|updates?|mailer(-daemon)?|bounce[s]?|billing|receipts?|invoices?|support-noreply|accounts?|security|system|automated|bot)([+._-].*)?$/i;
+
+/**
+ * Gmail-style tab for a row. Bulk mail (a List-Unsubscribe header) is
+ * Promotions, social networks are Social, automated senders are Updates,
+ * and everything else — real people — is Primary.
+ */
+export function categorize(
+  senderEmails: string[],
+  hasListUnsubscribe: boolean,
+): MailCategory {
+  const domains = senderEmails.map((e) =>
+    e.slice(e.lastIndexOf("@") + 1).toLowerCase(),
+  );
+  if (
+    domains.some((d) =>
+      SOCIAL_DOMAINS.some((s) => d === s || d.endsWith(`.${s}`)),
+    )
+  )
+    return "social";
+  if (hasListUnsubscribe) return "promotions";
+  if (senderEmails.some((e) => AUTOMATED_LOCAL.test(e.split("@")[0] ?? "")))
+    return "updates";
+  return "primary";
+}
 
 const listGroupedPeopleRoute = createRoute({
   method: "get",
@@ -135,6 +185,17 @@ const listGroupedPeopleRoute = createRoute({
       sequenced: z.enum(["1", "true"]).optional().openapi({
         description: "Only contacts currently enrolled in a sequence (active)",
       }),
+      hasAttachment: z.enum(["1", "true"]).optional().openapi({
+        description: "Only rows with a (non-inline) attachment",
+      }),
+      from: z.string().optional().openapi({
+        description:
+          "Only rows whose sender (person, or a group participant) matches this name or address",
+      }),
+      category: z
+        .enum(["primary", "promotions", "social", "updates"])
+        .optional()
+        .openapi({ description: "Gmail-style category tab" }),
       folder: z
         .enum(["all", "inbox", "starred", "snoozed", "archive", "sent"])
         .optional()
@@ -196,6 +257,9 @@ peopleRouter.openapi(listGroupedPeopleRoute, async (c) => {
     unread,
     drafts: draftsOnly,
     sequenced,
+    hasAttachment: attachmentsOnly,
+    from,
+    category,
     folder,
     sort,
     direction,
@@ -258,6 +322,12 @@ peopleRouter.openapi(listGroupedPeopleRoute, async (c) => {
           JOIN emails_fts ON emails.rowid = emails_fts.rowid
           WHERE emails_fts MATCH ${ftsQuery} ${ftsInboxScope} AND emails.conversation_id IS NULL
         ))`,
+    );
+  }
+  if (from) {
+    const pattern = `%${escapeLike(from)}%`;
+    personConditions.push(
+      sql`(s.email LIKE ${pattern} ESCAPE '\\' OR s.name LIKE ${pattern} ESCAPE '\\')`,
     );
   }
   // Hide senders that are on the global blocklist (exact email or domain).
@@ -401,6 +471,15 @@ peopleRouter.openapi(listGroupedPeopleRoute, async (c) => {
       )
     )`);
   }
+  if (from) {
+    const pattern = `%${escapeLike(from)}%`;
+    groupConditions.push(sql`g.conversation_id IN (
+      SELECT DISTINCT e.conversation_id FROM ${emails} e
+      JOIN ${people} p ON p.id = e.person_id
+      WHERE e.conversation_id IS NOT NULL
+      AND (p.email LIKE ${pattern} ESCAPE '\\' OR p.name LIKE ${pattern} ESCAPE '\\')
+    )`);
+  }
   const groupExtraConditions =
     groupConditions.length > 0
       ? sql`AND ${sql.join(groupConditions, sql` AND `)}`
@@ -506,6 +585,36 @@ peopleRouter.openapi(listGroupedPeopleRoute, async (c) => {
         ? st.snoozedUntil
         : null;
   }
+  // Categories: one query per row kind for "has bulk-mail headers", then
+  // sender heuristics in categorize().
+  const promoPeople = new Set(
+    (
+      await db.all<{ k: string }>(sql`
+        SELECT DISTINCT person_id AS k FROM ${emails}
+        WHERE conversation_id IS NULL AND lower(raw_headers) LIKE '%list-unsubscribe%'
+      `)
+    ).map((r) => r.k),
+  );
+  const promoConvs = new Set(
+    (
+      await db.all<{ k: string }>(sql`
+        SELECT DISTINCT conversation_id AS k FROM ${emails}
+        WHERE conversation_id IS NOT NULL AND lower(raw_headers) LIKE '%list-unsubscribe%'
+      `)
+    ).map((r) => r.k),
+  );
+  for (const r of merged) {
+    r.category =
+      r.type === "person"
+        ? categorize([r.email], promoPeople.has(r.id))
+        : // Group senders are hydrated after paging; bulk headers decide.
+          promoConvs.has(r.id)
+          ? "promotions"
+          : "primary";
+  }
+  if (category) merged = merged.filter((r) => r.category === category);
+  if (attachmentsOnly) merged = merged.filter((r) => r.hasAttachment === 1);
+
   switch (folder) {
     case "inbox":
       merged = merged.filter((r) => !r.archivedAt && !r.snoozedUntil);

@@ -33,6 +33,11 @@
           "data-density",
           p.density === "compact" ? "compact" : "comfortable",
         );
+        var palettes = ["ink", "slate", "indigo", "forest", "claret", "paper"];
+        r.setAttribute(
+          "data-palette",
+          palettes.indexOf(p.palette) >= 0 ? p.palette : "navy",
+        );
       })();
     </script>
 

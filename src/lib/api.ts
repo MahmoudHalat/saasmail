@@ -32,6 +32,8 @@ export interface GroupedPerson {
   hasSent: boolean;
   latestSubject: string | null;
   snippet: string | null;
+  /** Gmail-style tab: bulk mail = promotions, social networks, automated = updates. */
+  category: MailCategory;
 }
 
 /**
@@ -67,6 +69,8 @@ export interface GroupedConversation {
   hasSent: boolean;
   latestSubject: string | null;
   snippet: string | null;
+  /** Gmail-style tab: bulk mail = promotions, social networks, automated = updates. */
+  category: MailCategory;
 }
 
 /** Row state for a grouped item built on the client (not from the list). */
@@ -78,7 +82,10 @@ export const EMPTY_MAIL_ROW_STATE = {
   hasSent: false,
   latestSubject: null,
   snippet: null,
+  category: "primary",
 } as const;
+
+export type MailCategory = "primary" | "promotions" | "social" | "updates";
 
 /** Discriminated union — anything that shows up in the inbox sidebar/table. */
 export type GroupedItem = GroupedPerson | GroupedConversation;
@@ -136,6 +143,8 @@ export interface Stats {
   totalEmails: number;
   unreadCount: number;
   recipients: string[];
+  /** Unread received emails per inbox address. */
+  inboxUnread: Record<string, number>;
   senderIdentities: Array<{
     email: string;
     displayName: string | null;
@@ -277,11 +286,21 @@ export async function updateMailState(
 export type UiTheme = "default" | "gmail" | "outlook";
 export type ColorMode = "light" | "dark" | "system";
 export type Density = "comfortable" | "compact";
+export type Palette =
+  | "navy"
+  | "ink"
+  | "slate"
+  | "indigo"
+  | "forest"
+  | "claret"
+  | "paper";
 
 export interface UserPreferences {
   uiTheme: UiTheme;
   colorMode: ColorMode;
   density: Density;
+  /** Colour theme of the default layout. */
+  palette: Palette;
 }
 
 export async function fetchPreferences(): Promise<UserPreferences> {
@@ -306,6 +325,11 @@ export async function fetchGroupedPeople(params?: {
   sequenced?: boolean;
   /** Mail folder; omitted means "all" (ignores star/archive/snooze). */
   folder?: MailFolder;
+  /** Only rows with a real (non-inline) attachment. */
+  hasAttachment?: boolean;
+  /** Sender name or address contains this. */
+  from?: string;
+  category?: MailCategory;
   sort?: InboxSort;
   /** Optional explicit direction. Server applies the natural default if omitted. */
   direction?: InboxSortDirection;
@@ -320,6 +344,9 @@ export async function fetchGroupedPeople(params?: {
   if (params?.sequenced) qs.set("sequenced", "1");
   if (params?.folder && params.folder !== "all")
     qs.set("folder", params.folder);
+  if (params?.hasAttachment) qs.set("hasAttachment", "1");
+  if (params?.from) qs.set("from", params.from);
+  if (params?.category) qs.set("category", params.category);
   if (params?.sort && params.sort !== "recency") qs.set("sort", params.sort);
   // Only send direction when it differs from the natural default —
   // keeps the URL stable for the common case and avoids cache-busting.

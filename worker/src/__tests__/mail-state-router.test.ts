@@ -185,6 +185,7 @@ describe("user preferences", () => {
       uiTheme: "default",
       colorMode: "system",
       density: "comfortable",
+      palette: "navy",
     });
 
     res = await authFetch("/api/user/preferences", {
@@ -204,6 +205,7 @@ describe("user preferences", () => {
       uiTheme: "outlook",
       colorMode: "dark",
       density: "comfortable",
+      palette: "navy",
     });
   });
 
@@ -214,5 +216,86 @@ describe("user preferences", () => {
       body: JSON.stringify({ uiTheme: "yahoo" }),
     });
     expect(res.status).toBe(400);
+  });
+});
+
+describe("grouped list filters for the mail layouts", () => {
+  let apiKey: string;
+
+  beforeAll(async () => {
+    await applyMigrations();
+  });
+
+  beforeEach(async () => {
+    await cleanDb();
+    ({ apiKey } = await createTestUser());
+    await createTestPerson({
+      id: "p-ann",
+      email: "ann@example.com",
+      name: "Ann",
+    });
+    await createTestPerson({
+      id: "p-news",
+      email: "news@shop.example",
+      name: "Shop",
+    });
+    await createTestPerson({
+      id: "p-bot",
+      email: "no-reply@service.example",
+      name: "Service",
+    });
+    await createTestPerson({
+      id: "p-li",
+      email: "messages@linkedin.com",
+      name: "LinkedIn",
+    });
+    await createTestEmail({ id: "e-ann", personId: "p-ann", messageId: "1@x" });
+    await createTestEmail({
+      id: "e-news",
+      personId: "p-news",
+      messageId: "2@x",
+      recipient: "sales@saasmail.test",
+      rawHeaders: JSON.stringify({ "list-unsubscribe": "<mailto:u@x>" }),
+    });
+    await createTestEmail({ id: "e-bot", personId: "p-bot", messageId: "3@x" });
+    await createTestEmail({
+      id: "e-li",
+      personId: "p-li",
+      messageId: "4@x",
+      isRead: 1,
+    });
+  });
+
+  it("assigns Gmail-style categories and filters by them", async () => {
+    const all = await grouped(apiKey);
+    const cat = Object.fromEntries(all.map((r) => [r.id, r.category]));
+    expect(cat).toEqual({
+      "p-ann": "primary",
+      "p-news": "promotions",
+      "p-bot": "updates",
+      "p-li": "social",
+    });
+    const res = await authFetch("/api/people/grouped?category=promotions", {
+      apiKey,
+    });
+    const { data } = await res.json();
+    expect(data.map((r: any) => r.id)).toEqual(["p-news"]);
+  });
+
+  it("filters by sender", async () => {
+    const res = await authFetch("/api/people/grouped?from=linkedin", {
+      apiKey,
+    });
+    const { data } = await res.json();
+    expect(data.map((r: any) => r.id)).toEqual(["p-li"]);
+  });
+
+  it("reports unread counts per inbox in stats", async () => {
+    const res = await authFetch("/api/stats", { apiKey });
+    const body = await res.json();
+    expect(body.inboxUnread).toEqual({
+      "inbox@saasmail.test": 2,
+      "sales@saasmail.test": 1,
+    });
   });
 });
