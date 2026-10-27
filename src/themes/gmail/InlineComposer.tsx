@@ -103,7 +103,6 @@ export function InlineComposer({
   const [showCc, setShowCc] = useState(mode === "replyAll" && cc.length > 0);
   const [bodyHtml, setBodyHtml] = useState(isForward ? forwardHtml : "");
   const [bodyText, setBodyText] = useState("");
-  const sending = false;
   const [error, setError] = useState("");
   const wrapRef = useRef<HTMLDivElement>(null);
 
@@ -153,8 +152,9 @@ export function InlineComposer({
 
   const contextKey = isForward ? `forward:${target.id}` : `reply:${target.id}`;
 
+  // Send closes the box at once and hands off to sendWithUndo, so there's
+  // no in-flight state to guard here.
   const send = () => {
-    if (sending) return;
     setError("");
     const finalBody = signature
       ? `${bodyHtml}<div data-signature>${signature}</div>`
@@ -366,7 +366,6 @@ export function InlineComposer({
           <button
             type="button"
             onClick={send}
-            disabled={sending}
             className={cn(
               "inline-flex h-9 items-center gap-2 rounded-full bg-accent px-5 text-sm font-medium text-accent-foreground hover:bg-accent-hover disabled:opacity-60",
             )}

@@ -11,7 +11,7 @@ import {
   Trash2,
 } from "lucide-react";
 import type { ReactNode } from "react";
-import type { ListState } from "./lib";
+import { negatedOperators, type ListState } from "./lib";
 
 /** Calm, Gmail-style empty states per folder. */
 export function EmptyState({
@@ -28,8 +28,11 @@ export function EmptyState({
   if (state.q || state.from || state.attachment) {
     icon = <Search size={40} />;
     title = "No messages matched your search";
+    const negated = state.q ? negatedOperators(state.q) : [];
     body =
-      "Try different words, or use search options to look by sender, inbox or unread mail.";
+      negated.length > 0
+        ? `Search can't exclude mail, so ${negated.join(", ")} was searched as plain text. Remove the "-" to search for it, or use search options to narrow by sender, inbox or unread mail.`
+        : "Try different words, or use search options to look by sender, inbox or unread mail.";
   } else if (state.folder === "inbox" && state.tab && state.tab !== "primary") {
     icon = <Tag size={40} />;
     title = `Your ${state.tab[0].toUpperCase()}${state.tab.slice(1)} tab is empty`;

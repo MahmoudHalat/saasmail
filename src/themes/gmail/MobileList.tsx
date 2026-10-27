@@ -504,16 +504,19 @@ export function MobileSelectionBar({
           <Archive size={22} />
         </button>
       )}
-      <button
-        type="button"
-        className="gm-icon-btn"
-        style={{ width: 48, height: 48 }}
-        aria-label={inTrash ? "Delete forever" : "Delete"}
-        disabled={!canDelete}
-        onClick={() => act.requestDelete(selected, onClear)}
-      >
-        <Trash2 size={22} />
-      </button>
+      {/* In Trash, Delete means delete forever: admins only. */}
+      {(!inTrash || act.canDeleteForever) && (
+        <button
+          type="button"
+          className="gm-icon-btn"
+          style={{ width: 48, height: 48 }}
+          aria-label={inTrash ? "Delete forever" : "Delete"}
+          disabled={!canDelete}
+          onClick={() => act.requestDelete(selected, onClear)}
+        >
+          <Trash2 size={22} />
+        </button>
+      )}
       {anyUnread ? (
         <button
           type="button"

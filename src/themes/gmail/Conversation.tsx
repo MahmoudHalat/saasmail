@@ -421,7 +421,6 @@ interface Props {
   onChanged: () => void;
   /** Message id from a #m= deep link to expand and scroll to. */
   focusMessageId?: string | null;
-  labelFilter?: string | null;
   /** Start a reply / forward once loaded (from the row menu). */
   initialAction?: InlineMode | null;
   onActionDone?: () => void;
@@ -762,6 +761,8 @@ export default function Conversation({
   const trashed = !!item.trashedAt;
   // Delete moves to Trash; inside Trash only people can be deleted forever.
   const canDelete = !trashed || item.type === "person";
+  // Delete forever is admin-only (it removes the person for the whole team).
+  const showDelete = !trashed || act.canDeleteForever;
   const deleteLabel = !trashed
     ? "Delete"
     : canDelete
@@ -834,16 +835,21 @@ export default function Conversation({
       <GmMenuItem icon={<Forward size={20} />} onSelect={() => forward(latest)}>
         Forward
       </GmMenuItem>
-      <GmMenuSep />
-      {CATEGORIES.filter((c) => c !== item.category).map((c) => (
-        <GmMenuItem
-          key={c}
-          icon={<Tags size={20} />}
-          onSelect={() => act.moveToCategory([item], c)}
-        >
-          Move to {CATEGORY_LABELS[c]}
-        </GmMenuItem>
-      ))}
+      {/* Category overrides only apply to person rows. */}
+      {item.type === "person" && (
+        <>
+          <GmMenuSep />
+          {CATEGORIES.filter((c) => c !== item.category).map((c) => (
+            <GmMenuItem
+              key={c}
+              icon={<Tags size={20} />}
+              onSelect={() => act.moveToCategory([item], c)}
+            >
+              Move to {CATEGORY_LABELS[c]}
+            </GmMenuItem>
+          ))}
+        </>
+      )}
       <GmMenuSep />
       <GmMenuItem
         icon={<ShieldBan size={20} />}
@@ -872,9 +878,10 @@ export default function Conversation({
           : tb("Move to inbox", <InboxIcon size={22} />, () =>
               act.moveToInbox([item]),
             )}
-      {tb(deleteLabel, <Trash2 size={22} />, () => act.requestDelete([item]), {
-        disabled: !canDelete,
-      })}
+      {showDelete &&
+        tb(deleteLabel, <Trash2 size={22} />, () => act.requestDelete([item]), {
+          disabled: !canDelete,
+        })}
       {tb("Mark as unread", <Mail size={22} />, () => {
         void act.markUnread([item]).then(onBack);
       })}
@@ -903,9 +910,10 @@ export default function Conversation({
           : tb("Move to inbox", <InboxIcon size={20} />, () =>
               act.moveToInbox([item]),
             )}
-      {tb(deleteLabel, <Trash2 size={20} />, () => act.requestDelete([item]), {
-        disabled: !canDelete,
-      })}
+      {showDelete &&
+        tb(deleteLabel, <Trash2 size={20} />, () => act.requestDelete([item]), {
+          disabled: !canDelete,
+        })}
       <span className="mx-1 h-5 w-px bg-border" />
       {tb("Mark as unread", <Mail size={20} />, () => {
         void act.markUnread([item]).then(onBack);

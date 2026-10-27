@@ -28,7 +28,7 @@ import {
   formatListDate,
   type GmailFolder,
 } from "./lib";
-import { inInboxView, type RowActions } from "./actions";
+import { canMoveToTab, inInboxView, type RowActions } from "./actions";
 import { GmMenu, GmMenuItem, LabelChip, SnoozeMenu } from "./ui";
 
 export type SelectPreset =
@@ -109,6 +109,9 @@ export function ListToolbar({
   const anyUnread = selected.some((s) => s.unreadCount > 0);
   const inTrash = folder === "trash";
   const canDelete = !inTrash || selected.some((s) => s.type === "person");
+  // In Trash, Delete means delete forever: admins only.
+  const showDelete = !inTrash || act.canDeleteForever;
+  const canMoveTab = canMoveToTab(selected);
 
   return (
     <div
@@ -207,20 +210,22 @@ export function ListToolbar({
               <Archive size={20} />
             </IconBtn>
           )}
-          <IconBtn
-            label={
-              inTrash
-                ? canDelete
-                  ? "Delete forever"
-                  : "Group conversations stay in Trash"
-                : "Delete"
-            }
-            onClick={() => act.requestDelete(selected)}
-            disabled={!canDelete}
-            testId="gmail-bulk-delete"
-          >
-            <Trash2 size={20} />
-          </IconBtn>
+          {showDelete && (
+            <IconBtn
+              label={
+                inTrash
+                  ? canDelete
+                    ? "Delete forever"
+                    : "Group conversations stay in Trash"
+                  : "Delete"
+              }
+              onClick={() => act.requestDelete(selected)}
+              disabled={!canDelete}
+              testId="gmail-bulk-delete"
+            >
+              <Trash2 size={20} />
+            </IconBtn>
+          )}
           <span className="mx-2 h-5 w-px bg-border" />
           {anyUnread ? (
             <IconBtn
@@ -299,6 +304,7 @@ export function ListToolbar({
               </GmMenuItem>
             )}
             {!allMode &&
+              canMoveTab &&
               (
                 ["primary", "promotions", "social", "updates"] as MailCategory[]
               ).map((c) => (
@@ -580,23 +586,25 @@ export const MailRow = memo(function MailRow({
             <InboxIcon size={18} />
           </button>
         )}
-        <button
-          type="button"
-          className="gm-icon-btn gm-sm"
-          aria-label={item.trashedAt ? "Delete forever" : "Delete"}
-          title={
-            !item.trashedAt
-              ? "Delete"
-              : item.type === "person"
-                ? "Delete forever"
-                : "Group conversations stay in Trash"
-          }
-          disabled={!!item.trashedAt && item.type !== "person"}
-          onClick={() => act.requestDelete([item])}
-          data-testid="gmail-row-delete"
-        >
-          <Trash2 size={18} />
-        </button>
+        {(!item.trashedAt || act.canDeleteForever) && (
+          <button
+            type="button"
+            className="gm-icon-btn gm-sm"
+            aria-label={item.trashedAt ? "Delete forever" : "Delete"}
+            title={
+              !item.trashedAt
+                ? "Delete"
+                : item.type === "person"
+                  ? "Delete forever"
+                  : "Group conversations stay in Trash"
+            }
+            disabled={!!item.trashedAt && item.type !== "person"}
+            onClick={() => act.requestDelete([item])}
+            data-testid="gmail-row-delete"
+          >
+            <Trash2 size={18} />
+          </button>
+        )}
         {unread ? (
           <button
             type="button"
@@ -694,7 +702,9 @@ export function CategoryTabs({
             data-active={on ? "true" : undefined}
             onClick={() => onSelect(c)}
             title={
-              n > 0 ? `${CATEGORY_LABELS[c]}: ${n} unread` : CATEGORY_LABELS[c]
+              n > 0
+                ? `${CATEGORY_LABELS[c]}: ${n} new since you last opened this tab`
+                : CATEGORY_LABELS[c]
             }
             data-testid={`gmail-tab-${c}`}
           >

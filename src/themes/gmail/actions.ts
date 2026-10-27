@@ -10,9 +10,19 @@ export interface RowActions {
    * deletes forever.
    */
   requestDelete: (items: GroupedItem[], after?: () => void) => void;
+  /**
+   * Admins only: deleting forever removes the person and all their mail
+   * for the whole team (`DELETE /api/people/:id` is admin-gated). Menus
+   * hide "Delete forever" / "Empty Trash" when this is false.
+   */
+  canDeleteForever: boolean;
   /** Out of Trash, back where it was. */
   restore: (items: GroupedItem[]) => void;
-  /** Always put mail from these senders in this inbox tab. */
+  /**
+   * Always put mail from these senders in this inbox tab. Person rows only:
+   * the server applies category overrides to person rows, so a group
+   * conversation never moves.
+   */
   moveToCategory: (items: GroupedItem[], category: MailCategory) => void;
   markRead: (items: GroupedItem[]) => void;
   markUnread: (items: GroupedItem[]) => Promise<void>;
@@ -46,14 +56,17 @@ export function inInboxView(item: GroupedItem) {
   return !item.archivedAt && !item.snoozedUntil && !item.trashedAt;
 }
 
-/** Sender addresses for a category override. */
+/** Sender addresses for a category override (person rows only). */
 export function senderAddresses(items: GroupedItem[]): string[] {
   const out = new Set<string>();
-  for (const it of items) {
+  for (const it of items)
     if (it.type === "person") out.add(it.email.toLowerCase());
-    else for (const p of it.participants) out.add(p.email.toLowerCase());
-  }
   return [...out];
+}
+
+/** Whether "Move to tab" can act on any of these rows. */
+export function canMoveToTab(items: GroupedItem[]): boolean {
+  return items.some((i) => i.type === "person");
 }
 
 export function senderEmail(item: GroupedItem): string {

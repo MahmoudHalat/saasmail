@@ -331,9 +331,11 @@ function MobileDrawer({
                   navigate("/settings");
                 }}
               />
+              {/* Narrow windows can still have a keyboard (a resized desktop
+                  browser, a tablet with a keyboard). */}
               <NavRow
-                icon={<CircleHelp size={20} />}
-                label="Help & feedback"
+                icon={<Keyboard size={20} />}
+                label="Keyboard shortcuts"
                 onClick={() => {
                   onClose();
                   onShortcuts();

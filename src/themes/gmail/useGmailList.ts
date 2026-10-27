@@ -21,8 +21,8 @@ import { onInboxRefresh } from "@/lib/inbox-events";
 import { showToast } from "@/lib/toast";
 
 /**
- * The Gmail layout's list data: like the shared useMailList, plus the
- * Gmail-only filters (category tab, sender, attachment, sort), an undo
+ * The Gmail layout's list data: grouped rows with optimistic mail-state
+ * updates, plus the Gmail-only filters (category tab, sender, attachment, sort), an undo
  * stack for the `z` shortcut and a "load every page" helper for
  * "Select all N conversations".
  */

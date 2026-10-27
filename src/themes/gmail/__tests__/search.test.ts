@@ -4,6 +4,7 @@ import {
   dateQuery,
   folderQuery,
   parseListState,
+  negatedOperators,
   parseSearchQuery,
   pushRecent,
   resolveShortcut,
@@ -35,13 +36,32 @@ describe("parseSearchQuery", () => {
     expect(s.q).toBe('"exact words" invoice');
   });
 
-  it("understands quoted values and is:starred / is:snoozed / is:read", () => {
+  it("understands quoted values and is:starred / is:snoozed", () => {
     expect(parseSearchQuery('from:"Ana Lopez"').from).toBe("Ana Lopez");
     expect(parseSearchQuery("is:starred").folder).toBe("starred");
     expect(parseSearchQuery("is:snoozed").folder).toBe("snoozed");
     expect(parseSearchQuery("in:anywhere").folder).toBe("all");
     expect(parseSearchQuery("in:sent").folder).toBe("sent");
     expect(parseSearchQuery("in:drafts").folder).toBe("drafts");
+  });
+
+  it("keeps negated operators and is:read as text, never as the positive filter", () => {
+    const neg = parseSearchQuery("-from:bob invoice");
+    expect(neg.from).toBe("");
+    expect(neg.q).toBe("-from:bob invoice");
+    expect(parseSearchQuery("-is:unread").unread).toBeFalsy();
+    expect(parseSearchQuery("-in:trash").folder).toBe("all");
+    const read = parseSearchQuery("is:read");
+    expect(read.unread).toBeFalsy();
+    expect(read.q).toBe("is:read");
+  });
+
+  it("finds negated operators in free text", () => {
+    expect(negatedOperators('-from:bob x -subject:"a b"')).toEqual([
+      "-from:bob",
+      '-subject:"a b"',
+    ]);
+    expect(negatedOperators("re-sent from:bob")).toEqual([]);
   });
 
   it("resolves label: by name or address", () => {

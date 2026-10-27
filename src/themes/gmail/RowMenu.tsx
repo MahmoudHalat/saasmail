@@ -23,7 +23,7 @@ import type { ReactNode } from "react";
 import type { GroupedItem } from "@/lib/api";
 import { snoozePresets } from "@/hooks/useMailList";
 import { itemTitle } from "@/hooks/useMailList";
-import { inInboxView, type RowActions } from "./actions";
+import { canMoveToTab, inInboxView, type RowActions } from "./actions";
 import { CATEGORIES, CATEGORY_LABELS } from "./lib";
 
 export interface RowMenuState {
@@ -100,12 +100,10 @@ export function RowMenu({
   state,
   onClose,
   act,
-  labels,
 }: {
   state: RowMenuState | null;
   onClose: () => void;
   act: RowActions;
-  labels: Array<{ address: string; displayName: string | null }>;
 }) {
   const items = state?.items ?? [];
   const one = items.length === 1 ? items[0] : null;
@@ -115,6 +113,9 @@ export function RowMenu({
   const outOfInbox = items.some((i) => !inInboxView(i));
   const anyTrashed = items.some((i) => !!i.trashedAt);
   const canDelete = !anyTrashed || items.some((i) => i.type === "person");
+  // In Trash, Delete means delete forever: admins only.
+  const showDelete = !anyTrashed || act.canDeleteForever;
+  const canMoveTab = canMoveToTab(items);
   const run = (fn: () => void) => () => {
     onClose();
     fn();
@@ -201,14 +202,16 @@ export function RowMenu({
               Archive
             </Item>
           )}
-          <Item
-            icon={<Trash2 size={18} />}
-            onSelect={run(() => act.requestDelete(items))}
-            disabled={!canDelete}
-            hint={anyTrashed ? undefined : "#"}
-          >
-            {anyTrashed ? "Delete forever" : "Delete"}
-          </Item>
+          {showDelete && (
+            <Item
+              icon={<Trash2 size={18} />}
+              onSelect={run(() => act.requestDelete(items))}
+              disabled={!canDelete}
+              hint={anyTrashed ? undefined : "#"}
+            >
+              {anyTrashed ? "Delete forever" : "Delete"}
+            </Item>
+          )}
           {anyUnread ? (
             <Item
               icon={<MailOpen size={18} />}
@@ -297,26 +300,30 @@ export function RowMenu({
               <Star size={18} /> Starred
             </Menu.Item>
           </Sub>
-          <Sub icon={<Tags size={18} />} label="Move to tab">
-            <Menu.Label className="max-w-[260px] px-4 pb-2 pt-1 text-xs text-text-secondary">
-              Future mail from {one ? "this sender" : "these senders"} goes to
-              the tab you pick.
-            </Menu.Label>
-            {CATEGORIES.map((c) => (
-              <Menu.Item
-                key={c}
-                className="gm-menu-item"
-                onSelect={run(() => act.moveToCategory(items, c))}
-              >
-                {CATEGORY_LABELS[c]}
-                {one?.category === c && (
-                  <span className="ml-auto text-xs text-text-secondary">
-                    current
-                  </span>
-                )}
-              </Menu.Item>
-            ))}
-          </Sub>
+          {canMoveTab && (
+            <Sub icon={<Tags size={18} />} label="Move to tab">
+              <Menu.Label className="max-w-[260px] px-4 pb-2 pt-1 text-xs text-text-secondary">
+                Future mail from {one ? "this sender" : "these senders"} goes to
+                the tab you pick.
+                {items.some((i) => i.type !== "person") &&
+                  " Group conversations can't change tabs."}
+              </Menu.Label>
+              {CATEGORIES.map((c) => (
+                <Menu.Item
+                  key={c}
+                  className="gm-menu-item"
+                  onSelect={run(() => act.moveToCategory(items, c))}
+                >
+                  {CATEGORY_LABELS[c]}
+                  {one?.category === c && (
+                    <span className="ml-auto text-xs text-text-secondary">
+                      current
+                    </span>
+                  )}
+                </Menu.Item>
+              ))}
+            </Sub>
+          )}
           {sep}
           <Item
             icon={<Search size={18} />}

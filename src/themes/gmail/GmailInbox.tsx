@@ -143,6 +143,8 @@ export default function GmailInbox() {
   const prefs = usePreferences();
   const online = useOnline();
   const { data: session } = useSession();
+  // Deleting forever is admin-only on the server (DELETE /api/people/:id).
+  const isAdmin = session?.user?.role === "admin";
   const { brandName } = useBranding();
   const [params] = useSearchParams();
   const navigate = useNavigate();
@@ -578,6 +580,14 @@ export default function GmailInbox() {
         after?.();
         return;
       }
+      // Keyboard (#) and drag-to-Trash reach here too; the menus hide it.
+      if (!isAdmin) {
+        showToast({
+          kind: "info",
+          message: "Only an admin can delete conversations forever.",
+        });
+        return;
+      }
       if (!its.some((i) => i.type === "person")) {
         showToast({
           kind: "info",
@@ -596,8 +606,11 @@ export default function GmailInbox() {
       );
       if (state.folder === "trash") leaveIfOpen(its);
     },
+    canDeleteForever: isAdmin,
     moveToCategory: (its, category) => {
+      // Category overrides only apply to person rows; groups stay put.
       const senders = senderAddresses(its);
+      const skipped = its.filter((i) => i.type !== "person").length;
       if (!senders.length) return;
       setCategoryOverride(senders, category)
         .then(() => {
@@ -613,7 +626,7 @@ export default function GmailInbox() {
           list.setUndo(undo);
           showToast({
             kind: "info",
-            message: `${senders.length === 1 ? "Sender" : `${senders.length} senders`} moved to ${CATEGORY_LABELS[category]}. Future mail goes there too.`,
+            message: `${senders.length === 1 ? "Sender" : `${senders.length} senders`} moved to ${CATEGORY_LABELS[category]}. Future mail goes there too.${skipped ? ` ${skipped === 1 ? "1 group conversation" : `${skipped} group conversations`} can't change tabs and stayed put.` : ""}`,
             action: {
               label: "Undo",
               onClick: (dismiss) => {
@@ -756,7 +769,12 @@ export default function GmailInbox() {
       }),
     requestDelete: () =>
       state.folder === "trash"
-        ? setConfirm({ items: [], all: true })
+        ? isAdmin
+          ? setConfirm({ items: [], all: true })
+          : showToast({
+              kind: "info",
+              message: "Only an admin can delete conversations forever.",
+            })
         : doAll({ trashed: true }, "{n} conversations moved to Trash", {
             trashed: false,
           }),
@@ -1196,8 +1214,12 @@ export default function GmailInbox() {
         }
         body={
           (confirm?.all
-            ? "Every conversation in Trash, with all its messages and attachments, will be deleted forever. This can't be undone."
-            : "This deletes the conversation and every message and attachment in it forever. This can't be undone.") +
+            ? "Every person in Trash, with all their mail and attachments, will be deleted for the whole team, not just removed from your Trash. This can't be undone."
+            : (confirm &&
+              confirm.items.filter((i) => i.type === "person").length > 1
+                ? "This deletes these people and all their mail and attachments"
+                : "This deletes this person and all their mail and attachments") +
+              " for the whole team, not just from your Trash. This can't be undone.") +
           (confirm?.all || confirm?.items.some((i) => i.type === "group")
             ? " Group conversations stay in Trash (they can only be restored)."
             : "")
@@ -1228,12 +1250,7 @@ export default function GmailInbox() {
           pick.after?.();
         }}
       />
-      <RowMenu
-        state={menu}
-        onClose={() => setMenu(null)}
-        act={act}
-        labels={labels}
-      />
+      <RowMenu state={menu} onClose={() => setMenu(null)} act={act} />
     </>
   );
 
@@ -1608,14 +1625,16 @@ export default function GmailInbox() {
             Conversations in Trash are hidden everywhere else. New mail brings
             one back.
           </span>
-          <button
-            type="button"
-            className="font-medium text-accent hover:underline"
-            onClick={() => setConfirm({ items: [], all: true })}
-            data-testid="gmail-empty-trash"
-          >
-            Empty Trash now
-          </button>
+          {isAdmin && (
+            <button
+              type="button"
+              className="font-medium text-accent hover:underline"
+              onClick={() => setConfirm({ items: [], all: true })}
+              data-testid="gmail-empty-trash"
+            >
+              Empty Trash now
+            </button>
+          )}
         </div>
       )}
       <div

@@ -370,10 +370,14 @@ const OLDER_NEWER: Record<string, Within> = {
 };
 
 /**
- * Parse a Gmail search box query into list state. Understands from:,
- * is:unread|read|starred|snoozed, has:attachment, in:inbox|archive|sent|
- * drafts|anywhere, label:, category:, newer_than:, older_than:1y. Values
- * may be quoted. Anything else stays as free text.
+ * Parse a Gmail search box query into list state. Understands from:, to:,
+ * label:, subject:, is:unread|starred|snoozed, has:attachment,
+ * in:inbox|archive|sent|drafts|snoozed|starred|trash|anywhere, category:,
+ * after:/before:, newer_than:, older_than:. Values may be quoted. Anything
+ * else stays as free text, including `is:read` (the server has no "read
+ * only" filter) and negated operators like `-from:bob` (it has no exclude
+ * filters either; see {@link negatedOperators}), so they are never
+ * silently treated as the positive filter.
  *
  * `labels` maps label names (and addresses) to inbox addresses so
  * `label:support` finds "support@acme.com".
@@ -388,6 +392,11 @@ export function parseSearchQuery(
   let m: RegExpExecArray | null;
   let explicitFolder = false;
   while ((m = re.exec(query))) {
+    if (m[2] && m[1]) {
+      // `-op:value`: excluding isn't supported, so don't apply `op:value`.
+      words.push(m[0]);
+      continue;
+    }
     if (m[2]) {
       const op = m[2].toLowerCase();
       const value = (m[4] ?? m[5] ?? "").trim();
@@ -469,6 +478,16 @@ export function parseSearchQuery(
   s.q = words.join(" ").trim();
   if (!explicitFolder) s.folder = "all";
   return s;
+}
+
+/**
+ * Negated operators (`-from:bob`) in a free-text query. Search can't
+ * exclude, so the UI says so instead of showing an unexplained empty list.
+ */
+export function negatedOperators(q: string): string[] {
+  return (
+    q.match(/(?:^|\s)-[a-z_]+:("[^"]*"|\S+)/gi)?.map((t) => t.trim()) ?? []
+  );
 }
 
 /** "3d" / "2m" / "1y" back from today as "YYYY-MM-DD" (or ""). */
