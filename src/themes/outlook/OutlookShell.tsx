@@ -22,7 +22,7 @@ import SuiteHeader, { doSignOut, useAppLinks } from "./SuiteHeader";
 import SettingsPanel, { SettingsBody } from "./SettingsPanel";
 import FolderList, { folderHref } from "./FolderList";
 import { SHORTCUT_HELP, parseFolder } from "./lib";
-import { markFolderRead } from "./folderOps";
+import { emptyTrash, markFolderRead } from "./folderOps";
 import { Menu, MenuContent, MenuItem, MenuTrigger } from "./Menu";
 import { Avatar, IconButton } from "./ui";
 import Tooltips from "./Tooltips";
@@ -217,6 +217,7 @@ function MobileDrawer() {
                   favoritesOpen={o.favoritesOpen}
                   onFavoritesOpen={(v) => o.setLayout({ favoritesOpen: v })}
                   onToggleFavorite={o.toggleFavorite}
+                  onEmptyTrash={() => void emptyTrash()}
                   onMarkAllRead={(t) =>
                     void markFolderRead(t).then(() =>
                       fetchStats()

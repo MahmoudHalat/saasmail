@@ -4,12 +4,13 @@ import TiptapEditor from "@/components/TiptapEditor";
 import CcInput from "@/components/CcInput";
 import AttachmentPicker from "@/components/AttachmentPicker";
 import AttachmentChips from "@/components/AttachmentChips";
-import { sendEmail, type CcEntry } from "@/lib/api";
+import { deleteDraft, sendEmail, type CcEntry } from "@/lib/api";
+import { sendWithUndo } from "@/lib/undo-send";
+import { useUndoSendSetting } from "./sendUndo";
 import { useDraftAutosave } from "@/lib/use-draft-autosave";
 import { dispatchEmailSent } from "@/lib/email-events";
 import { getFromLabel } from "@/lib/format";
 import { sanitizeEmailHtml } from "@/lib/sanitize-html";
-import { showToast } from "@/lib/toast";
 import { cn } from "@/lib/utils";
 import type { ComposePrefill } from "@/pages/ComposeModal";
 import { internalDomainsOf, useIdentities } from "./useConversation";
@@ -27,11 +28,23 @@ export default function ComposeForm({
   prefill,
   onClose,
   variant,
+  initialFiles,
+  initialError,
+  onReopen,
 }: {
   prefill: ComposePrefill | null;
   onClose: () => void;
   variant: "pane" | "mobile";
+  /** Content restored after Undo send or a failed send. */
+  initialFiles?: File[];
+  initialError?: string;
+  /** Reopen the composer with content (Undo send / send failure). */
+  onReopen: (
+    prefill: ComposePrefill,
+    extras: { files?: File[]; error?: string },
+  ) => void;
 }) {
+  const [undoSettings] = useUndoSendSetting();
   const { recipients, senderIdentities } = useIdentities();
   const [fromAddress, setFromAddress] = useState("");
   const [to, setTo] = useState(prefill?.to ?? "");
@@ -40,9 +53,9 @@ export default function ComposeForm({
   const [subject, setSubject] = useState(prefill?.subject ?? "");
   const [bodyHtml, setBodyHtml] = useState(prefill?.bodyHtml ?? "");
   const [bodyText, setBodyText] = useState("");
-  const [files, setFiles] = useState<File[]>([]);
+  const [files, setFiles] = useState<File[]>(initialFiles ?? []);
   const [sending, setSending] = useState(false);
-  const [error, setError] = useState("");
+  const [error, setError] = useState(initialError ?? "");
   const toRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -96,36 +109,55 @@ export default function ComposeForm({
   const canSend =
     !sending && !!to.trim() && !bodyIsEmpty && total <= ATTACHMENT_CAP_BYTES;
 
-  async function send() {
+  function send() {
     if (!canSend) {
       if (!to.trim()) setError("Add at least one recipient.");
       else if (bodyIsEmpty) setError("Write a message before sending.");
       return;
     }
     setSending(true);
-    setError("");
-    try {
-      const finalBody = safeSignatureHtml
-        ? `${bodyHtml}<div data-signature>${safeSignatureHtml}</div>`
-        : bodyHtml;
-      await sendEmail({
-        to: to.trim(),
-        fromAddress,
-        ...(cc.length ? { cc } : {}),
-        subject,
-        bodyHtml: finalBody,
-        ...(bodyText.trim() ? { bodyText } : {}),
-        ...(files.length ? { files: files.map((file) => ({ file })) } : {}),
-      });
-      dispatchEmailSent({ fromAddress, to, origin: "compose" });
-      clearDraft();
-      showToast({ kind: "success", message: "Message sent" });
-      onClose();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to send email");
-    } finally {
-      setSending(false);
-    }
+    const finalBody = safeSignatureHtml
+      ? `${bodyHtml}<div data-signature>${safeSignatureHtml}</div>`
+      : bodyHtml;
+    const snapshot: ComposePrefill = {
+      from: fromAddress,
+      to: to.trim(),
+      cc,
+      subject,
+      bodyHtml,
+    };
+    const held = files;
+    const payload = {
+      to: to.trim(),
+      fromAddress,
+      ...(cc.length ? { cc } : {}),
+      subject,
+      bodyHtml: finalBody,
+      ...(bodyText.trim() ? { bodyText } : {}),
+      ...(held.length ? { files: held.map((file) => ({ file })) } : {}),
+    };
+    // Close at once; the draft is kept (saved on close) until it really goes.
+    onClose();
+    sendWithUndo({
+      seconds: undoSettings.undoSendSeconds,
+      send: async () => {
+        await sendEmail(payload);
+        dispatchEmailSent({ fromAddress, to: payload.to, origin: "compose" });
+      },
+      onUndo: () => onReopen(snapshot, { files: held }),
+      onSent: () => {
+        // Let the close-flush save land first, then drop the draft.
+        window.setTimeout(
+          () => void deleteDraft("compose").catch(() => {}),
+          1500,
+        );
+      },
+      onError: (e) =>
+        onReopen(snapshot, {
+          files: held,
+          error: e instanceof Error ? e.message : "Message not sent",
+        }),
+    });
   }
 
   function discard() {

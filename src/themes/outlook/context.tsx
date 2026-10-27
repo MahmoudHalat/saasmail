@@ -9,6 +9,7 @@ import {
 } from "react";
 import type { ComposePrefill } from "@/pages/ComposeModal";
 import { fetchStats } from "@/lib/api";
+import { useLayoutSettings } from "@/lib/preferences";
 import {
   DEFAULT_FAVORITES,
   LEGACY_DEFAULT_FAVORITES,
@@ -30,9 +31,9 @@ export const ALL_QUICK_ACTIONS: QuickAction[] = [
   "pin",
   "read",
 ];
-export type ShowAs = "conversations" | "messages";
+export type ListSortPref = "date" | "unread" | "files";
 
-interface LayoutPrefs {
+export interface LayoutPrefs {
   /** Focused Inbox (Focused / Other pivot). */
   focusedInbox: boolean;
   /** Hover actions shown on message list rows. */
@@ -44,7 +45,6 @@ interface LayoutPrefs {
   inboxesOpen: boolean;
   /** Folder pane state below 1280px (collapsed by default, like Outlook). */
   folderPaneOpenNarrow: boolean;
-  showAs: ShowAs;
   swipeRight: SwipeAction;
   swipeLeft: SwipeAction;
   readingPane: ReadingPanePos;
@@ -53,10 +53,13 @@ interface LayoutPrefs {
   listWidth: number;
   /** "Spacious" vs "Cozy" (both map to the comfortable account density). */
   spacious: boolean;
+  /** Arrange by (server-side sort). */
+  sort: ListSortPref;
 }
 
-const LAYOUT_KEY = "saasmail.outlook.layout";
-const DEFAULT_LAYOUT: LayoutPrefs = {
+/** Old device-only key; useLayoutSettings migrates it into the account. */
+const LEGACY_LAYOUT_KEY = "saasmail.outlook.layout";
+export const DEFAULT_LAYOUT: LayoutPrefs = {
   focusedInbox: true,
   quickActions: ALL_QUICK_ACTIONS,
   favorites: DEFAULT_FAVORITES,
@@ -64,7 +67,6 @@ const DEFAULT_LAYOUT: LayoutPrefs = {
   accountOpen: true,
   inboxesOpen: true,
   folderPaneOpenNarrow: false,
-  showAs: "conversations",
   swipeRight: "archive",
   swipeLeft: "flag",
   readingPane: "right",
@@ -72,73 +74,78 @@ const DEFAULT_LAYOUT: LayoutPrefs = {
   folderPaneOpen: true,
   listWidth: 380,
   spacious: false,
+  sort: "date",
 };
 
-function readLayout(): LayoutPrefs {
-  try {
-    const raw = window.localStorage.getItem(LAYOUT_KEY);
-    if (!raw) return DEFAULT_LAYOUT;
-    const r = JSON.parse(raw) as Partial<LayoutPrefs>;
-    const swipes: SwipeAction[] = [
-      "archive",
-      "delete",
-      "flag",
-      "read",
-      "snooze",
-      "move",
-      "none",
-    ];
-    return {
-      focusedInbox: r.focusedInbox !== false,
-      quickActions: Array.isArray(r.quickActions)
-        ? r.quickActions.filter((a) => ALL_QUICK_ACTIONS.includes(a))
-        : DEFAULT_LAYOUT.quickActions,
-      favorites:
-        Array.isArray(r.favorites) &&
-        JSON.stringify(r.favorites) !== JSON.stringify(LEGACY_DEFAULT_FAVORITES)
-          ? r.favorites.filter((f) => typeof f === "string")
-          : DEFAULT_LAYOUT.favorites,
-      favoritesOpen: r.favoritesOpen !== false,
-      accountOpen: r.accountOpen !== false,
-      inboxesOpen: r.inboxesOpen !== false,
-      folderPaneOpenNarrow: r.folderPaneOpenNarrow === true,
-      showAs: r.showAs === "messages" ? "messages" : "conversations",
-      swipeRight: swipes.includes(r.swipeRight as SwipeAction)
-        ? (r.swipeRight as SwipeAction)
-        : DEFAULT_LAYOUT.swipeRight,
-      swipeLeft: swipes.includes(r.swipeLeft as SwipeAction)
-        ? (r.swipeLeft as SwipeAction)
-        : DEFAULT_LAYOUT.swipeLeft,
-      readingPane: (["right", "bottom", "off"] as const).includes(
-        r.readingPane as ReadingPanePos,
-      )
-        ? (r.readingPane as ReadingPanePos)
-        : DEFAULT_LAYOUT.readingPane,
-      conversationView:
-        typeof r.conversationView === "boolean"
-          ? r.conversationView
-          : DEFAULT_LAYOUT.conversationView,
-      folderPaneOpen:
-        typeof r.folderPaneOpen === "boolean"
-          ? r.folderPaneOpen
-          : DEFAULT_LAYOUT.folderPaneOpen,
-      listWidth:
-        typeof r.listWidth === "number" &&
-        r.listWidth >= 280 &&
-        r.listWidth <= 720
-          ? r.listWidth
-          : DEFAULT_LAYOUT.listWidth,
-      spacious: r.spacious === true,
-    };
-  } catch {
-    return DEFAULT_LAYOUT;
-  }
+const SWIPES: SwipeAction[] = [
+  "archive",
+  "delete",
+  "flag",
+  "read",
+  "snooze",
+  "move",
+  "none",
+];
+
+/** Settings come from the account; keep only well-formed values. */
+export function sanitizeLayout(
+  raw: Partial<Record<keyof LayoutPrefs, unknown>>,
+): LayoutPrefs {
+  const r = raw ?? {};
+  const bool = (v: unknown, d: boolean) => (typeof v === "boolean" ? v : d);
+  return {
+    focusedInbox: bool(r.focusedInbox, true),
+    quickActions: Array.isArray(r.quickActions)
+      ? (r.quickActions as QuickAction[]).filter((a) =>
+          ALL_QUICK_ACTIONS.includes(a),
+        )
+      : DEFAULT_LAYOUT.quickActions,
+    favorites:
+      Array.isArray(r.favorites) &&
+      JSON.stringify(r.favorites) !== JSON.stringify(LEGACY_DEFAULT_FAVORITES)
+        ? (r.favorites as unknown[]).filter(
+            (f): f is string => typeof f === "string",
+          )
+        : DEFAULT_LAYOUT.favorites,
+    favoritesOpen: bool(r.favoritesOpen, true),
+    accountOpen: bool(r.accountOpen, true),
+    inboxesOpen: bool(r.inboxesOpen, true),
+    folderPaneOpenNarrow: bool(r.folderPaneOpenNarrow, false),
+    swipeRight: SWIPES.includes(r.swipeRight as SwipeAction)
+      ? (r.swipeRight as SwipeAction)
+      : DEFAULT_LAYOUT.swipeRight,
+    swipeLeft: SWIPES.includes(r.swipeLeft as SwipeAction)
+      ? (r.swipeLeft as SwipeAction)
+      : DEFAULT_LAYOUT.swipeLeft,
+    readingPane: (["right", "bottom", "off"] as const).includes(
+      r.readingPane as ReadingPanePos,
+    )
+      ? (r.readingPane as ReadingPanePos)
+      : DEFAULT_LAYOUT.readingPane,
+    conversationView: bool(r.conversationView, true),
+    folderPaneOpen: bool(r.folderPaneOpen, true),
+    listWidth:
+      typeof r.listWidth === "number" &&
+      r.listWidth >= 280 &&
+      r.listWidth <= 720
+        ? r.listWidth
+        : DEFAULT_LAYOUT.listWidth,
+    spacious: r.spacious === true,
+    sort: (["date", "unread", "files"] as const).includes(
+      r.sort as ListSortPref,
+    )
+      ? (r.sort as ListSortPref)
+      : "date",
+  };
 }
 
 export interface ComposeState {
   /** Bumps on every open so a fresh form mounts. */
   id: number;
   prefill: ComposePrefill | null;
+  /** Reopened after Undo send / a failed send: attachments and the error. */
+  files?: File[];
+  error?: string;
 }
 
 interface OutlookContextValue extends LayoutPrefs {
@@ -150,7 +157,10 @@ interface OutlookContextValue extends LayoutPrefs {
   knownInboxes: string[];
   isMobile: boolean;
   compose: ComposeState | null;
-  openCompose: (prefill?: ComposePrefill | null) => void;
+  openCompose: (
+    prefill?: ComposePrefill | null,
+    extras?: { files?: File[]; error?: string },
+  ) => void;
   closeCompose: () => void;
   /** The shared bottom-right tray, for flows the theme does not own. */
   openTrayCompose: (prefill?: ComposePrefill) => void;
@@ -176,8 +186,16 @@ export function OutlookProvider({
   children: ReactNode;
   onTrayCompose: (prefill?: ComposePrefill) => void;
 }) {
-  const [layout, setLayoutState] = useState<LayoutPrefs>(() =>
-    typeof window === "undefined" ? DEFAULT_LAYOUT : readLayout(),
+  // Saved to the account (follows the user across devices); the old
+  // localStorage copy is migrated on first load.
+  const [rawLayout, updateLayout] = useLayoutSettings(
+    "outlook",
+    DEFAULT_LAYOUT as unknown as Record<string, unknown>,
+    LEGACY_LAYOUT_KEY,
+  );
+  const layout = useMemo(
+    () => sanitizeLayout(rawLayout as Partial<LayoutPrefs>),
+    [rawLayout],
   );
   const [compose, setCompose] = useState<ComposeState | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -186,17 +204,20 @@ export function OutlookProvider({
   const [mobileSearchOpen, setMobileSearchOpen] = useState(false);
   const [hideTabBar, setHideTabBar] = useState(false);
 
-  const setLayout = useCallback((patch: Partial<LayoutPrefs>) => {
-    setLayoutState((prev) => ({ ...prev, ...patch }));
-  }, []);
-  const toggleFavorite = useCallback((key: string) => {
-    setLayoutState((prev) => ({
-      ...prev,
-      favorites: prev.favorites.includes(key)
-        ? prev.favorites.filter((f) => f !== key)
-        : [...prev.favorites, key],
-    }));
-  }, []);
+  const setLayout = useCallback(
+    (patch: Partial<LayoutPrefs>) =>
+      updateLayout(patch as Partial<Record<string, unknown>>),
+    [updateLayout],
+  );
+  const toggleFavorite = useCallback(
+    (key: string) =>
+      setLayout({
+        favorites: layout.favorites.includes(key)
+          ? layout.favorites.filter((f) => f !== key)
+          : [...layout.favorites, key],
+      }),
+    [layout.favorites, setLayout],
+  );
   const [knownInboxes, setKnownInboxes] = useState<string[]>([]);
   useEffect(() => {
     fetchStats()
@@ -207,28 +228,25 @@ export function OutlookProvider({
   const narrow = useMedia("(max-width: 1279px)");
   const setPaneOpen = useCallback(
     (open: boolean) =>
-      setLayoutState((prev) =>
-        narrow
-          ? { ...prev, folderPaneOpenNarrow: open }
-          : { ...prev, folderPaneOpen: open },
+      setLayout(
+        narrow ? { folderPaneOpenNarrow: open } : { folderPaneOpen: open },
       ),
-    [narrow],
+    [narrow, setLayout],
   );
 
-  useEffect(() => {
-    try {
-      window.localStorage.setItem(LAYOUT_KEY, JSON.stringify(layout));
-    } catch {
-      /* storage disabled */
-    }
-  }, [layout]);
-
-  const openCompose = useCallback((prefill?: ComposePrefill | null) => {
-    setCompose((prev) => ({
-      id: (prev?.id ?? 0) + 1,
-      prefill: prefill ?? null,
-    }));
-  }, []);
+  const openCompose = useCallback(
+    (
+      prefill?: ComposePrefill | null,
+      extras?: { files?: File[]; error?: string },
+    ) => {
+      setCompose((prev) => ({
+        id: (prev?.id ?? 0) + 1,
+        prefill: prefill ?? null,
+        ...extras,
+      }));
+    },
+    [],
+  );
   const closeCompose = useCallback(() => setCompose(null), []);
 
   const value = useMemo<OutlookContextValue>(

@@ -7,6 +7,7 @@ import {
   markPeopleRead,
   updateMailState,
   type GroupedItem,
+  type MailCategory,
   type MailFolder,
   type Stats,
 } from "@/lib/api";
@@ -31,6 +32,15 @@ export interface OutlookListQuery {
   sequenced?: boolean;
   hasAttachment?: boolean;
   from?: string;
+  starred?: boolean;
+  pinned?: boolean;
+  after?: number;
+  before?: number;
+  subject?: string;
+  sort?: "recency" | "unread" | "attachments";
+  /** One server category, or several merged (Outlook "Other"). */
+  categories?: MailCategory[];
+  withTabCounts?: boolean;
 }
 
 export type StatePatch = {
@@ -38,7 +48,21 @@ export type StatePatch = {
   pinned?: boolean;
   archived?: boolean;
   snoozedUntil?: number | null;
+  trashed?: boolean;
 };
+
+export type TabCounts = Record<MailCategory, { unread: number; new: number }>;
+
+/** Order rows the way the server sorts them (for merged category pages). */
+function compareRows(sort: OutlookListQuery["sort"]) {
+  return (a: GroupedItem, b: GroupedItem) => {
+    if (sort === "unread" && a.unreadCount > 0 !== b.unreadCount > 0)
+      return a.unreadCount > 0 ? -1 : 1;
+    if (sort === "attachments" && a.hasAttachment > 0 !== b.hasAttachment > 0)
+      return a.hasAttachment > 0 ? -1 : 1;
+    return b.lastEmailAt - a.lastEmailAt;
+  };
+}
 
 const PAGE = 50;
 
@@ -57,13 +81,36 @@ export function useOutlookList(query: OutlookListQuery, enabled = true) {
   const pagesRef = useRef(pages);
   pagesRef.current = pages;
 
-  const fetchPage = (page: number) =>
-    fetchGroupedPeople({
-      ...queryRef.current,
-      q: queryRef.current.q || undefined,
-      page,
-      limit: PAGE,
-    });
+  const [tabCounts, setTabCounts] = useState<TabCounts | null>(null);
+
+  /** One page from the server; several categories are fetched and merged. */
+  const fetchPage = async (
+    page: number,
+  ): Promise<{
+    data: GroupedItem[];
+    total: number;
+    tabCounts?: TabCounts | null;
+  }> => {
+    const { categories, ...rest } = queryRef.current;
+    const base = { ...rest, q: rest.q || undefined, page, limit: PAGE };
+    if (!categories || categories.length <= 1) {
+      return fetchGroupedPeople({ ...base, category: categories?.[0] });
+    }
+    const parts = await Promise.all(
+      categories.map((category, i) =>
+        fetchGroupedPeople({
+          ...base,
+          category,
+          withTabCounts: i === 0 ? base.withTabCounts : undefined,
+        }),
+      ),
+    );
+    return {
+      data: parts.flatMap((r) => r.data).sort(compareRows(rest.sort)),
+      total: parts.reduce((n, r) => n + r.total, 0),
+      tabCounts: parts[0]?.tabCounts,
+    };
+  };
 
   /** Load pages 1..n (n = pages loaded so far, or 1 on a new query). */
   const load = useCallback(
@@ -86,8 +133,10 @@ export function useOutlookList(query: OutlookListQuery, enabled = true) {
               rows.push(it);
             }
           }
-        setItems(rows);
+        const multi = (queryRef.current.categories?.length ?? 0) > 1;
+        setItems(multi ? rows.sort(compareRows(queryRef.current.sort)) : rows);
         setTotal(res[0]?.total ?? 0);
+        if (res[0]?.tabCounts) setTabCounts(res[0].tabCounts);
         if (opts?.reset) setPages(1);
         setError(null);
       } catch (e) {
@@ -126,7 +175,13 @@ export function useOutlookList(query: OutlookListQuery, enabled = true) {
       if (id !== req.current) return;
       setItems((prev) => {
         const seen = new Set(prev.map(itemKey));
-        return [...prev, ...res.data.filter((r) => !seen.has(itemKey(r)))];
+        const next = [
+          ...prev,
+          ...res.data.filter((r) => !seen.has(itemKey(r))),
+        ];
+        return (queryRef.current.categories?.length ?? 0) > 1
+          ? next.sort(compareRows(queryRef.current.sort))
+          : next;
       });
       setTotal(res.total);
       setPages(next);
@@ -174,6 +229,8 @@ export function useOutlookList(query: OutlookListQuery, enabled = true) {
           : null;
       if (patch.snoozedUntil !== undefined)
         local.snoozedUntil = patch.snoozedUntil;
+      if (patch.trashed !== undefined)
+        local.trashedAt = patch.trashed ? Math.floor(Date.now() / 1000) : null;
       patchLocal(targets, local, remove);
       try {
         await updateMailState(targets.map(itemRef), patch);
@@ -225,8 +282,8 @@ export function useOutlookList(query: OutlookListQuery, enabled = true) {
           kind: "success",
           message:
             people.length === 1
-              ? "Conversation deleted"
-              : `${people.length} conversations deleted`,
+              ? "Conversation deleted permanently"
+              : `${people.length} conversations deleted permanently`,
         });
         loadStats();
       } catch (e) {
@@ -249,6 +306,7 @@ export function useOutlookList(query: OutlookListQuery, enabled = true) {
     stats,
     hasMore,
     loadMore,
+    tabCounts,
     refresh,
     loadStats,
     patchLocal,

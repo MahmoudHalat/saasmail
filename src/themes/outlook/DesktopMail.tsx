@@ -74,7 +74,13 @@ function useShortcuts(mail: OutlookMail) {
         case "forward":
           return conv(cmd);
         case "delete":
-          if (t.length) run(() => void mail.ops.delete(t));
+          // Delete → Deleted Items; Shift+Delete deletes permanently (asks).
+          if (t.length)
+            run(() =>
+              e.shiftKey
+                ? void mail.ops.deleteForever(t)
+                : void mail.ops.delete(t),
+            );
           return;
         case "archive":
           if (t.length) run(() => mail.ops.archive(t));
@@ -298,6 +304,7 @@ export default function DesktopMail({ mail }: { mail: OutlookMail }) {
                 onFavoritesOpen={(v) => o.setLayout({ favoritesOpen: v })}
                 onToggleFavorite={o.toggleFavorite}
                 onMarkAllRead={(t) => void mail.ops.markAllRead(t)}
+                onEmptyTrash={() => void mail.ops.emptyTrash()}
                 onDropRows={onDropRows}
               />
             </aside>

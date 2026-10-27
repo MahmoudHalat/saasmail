@@ -10,20 +10,28 @@ import {
   markEmailRead,
   updateMailState,
   type GroupedItem,
+  type MailCategory,
   type MailFolder,
+  setCategoryOverride,
 } from "@/lib/api";
+import { markFolderRead } from "@/lib/folder-actions";
+import { emptyTrash } from "./folderOps";
+import { REPLY_REOPEN_EVENT } from "./InlineReply";
+import { usePreferences } from "@/lib/preferences";
 import { itemKey, itemRef, itemTitle } from "@/hooks/useMailList";
 import { showToast } from "@/lib/toast";
 import {
   FOLDER_LABELS,
-  applyFilter,
+  filterQuery,
+  serverSort,
+  type ArrangeBy,
   folderQuery,
   groupRows,
   parseFolder,
   parseSearchQuery,
   rangeKeys,
-  splitFocused,
   sweepSelection,
+  senderAddresses,
   type ListFilter,
   type ListSort,
   type OlFolderId,
@@ -52,26 +60,6 @@ function parseOpen(
   return { type, id };
 }
 
-function readLocal<T extends string>(
-  key: string,
-  allowed: T[],
-  fallback: T,
-): T {
-  try {
-    const v = window.localStorage.getItem(key);
-    return v && (allowed as string[]).includes(v) ? (v as T) : fallback;
-  } catch {
-    return fallback;
-  }
-}
-function writeLocal(key: string, v: string) {
-  try {
-    window.localStorage.setItem(key, v);
-  } catch {
-    /* ignore */
-  }
-}
-
 /** Snapshot of a row's mail state, so Undo restores exactly. */
 interface Snapshot {
   item: GroupedItem;
@@ -85,6 +73,7 @@ function snapshot(items: GroupedItem[]): Snapshot[] {
       pinned: item.pinned,
       archived: !!item.archivedAt,
       snoozedUntil: item.snoozedUntil,
+      trashed: !!item.trashedAt,
     },
   }));
 }
@@ -117,31 +106,29 @@ export function useOutlookMail() {
   const openKey = openParam ? `${openParam.type}:${openParam.id}` : null;
 
   const [filter, setFilterState] = useState<ListFilter>("all");
-  const [sort, setSortState] = useState<ListSort>(() =>
-    readLocal(
-      "saasmail.outlook.sort",
-      ["date", "from", "category", "flag", "unread", "files"],
-      "date",
-    ),
-  );
-  const setSort = (s: ListSort) => {
-    setSortState(s);
-    writeLocal("saasmail.outlook.sort", s);
-  };
   const setFilter = (f: ListFilter) => setFilterState(f);
-  const [focusTab, setFocusTabState] = useState<FocusTab>(() =>
-    readLocal("saasmail.outlook.focus", ["focused", "other"], "focused"),
-  );
+  // Arrange by is an account setting (server-side sort).
+  const sort: ArrangeBy = o.sort;
+  const setSort = (s: ArrangeBy) => o.setLayout({ sort: s });
+  const [focusTab, setFocusTabState] = useState<FocusTab>("focused");
+  const { setPreferences } = usePreferences();
   const setFocusTab = (t: FocusTab) => {
     setFocusTabState(t);
-    writeLocal("saasmail.outlook.focus", t);
+    // Opening Other clears its "new" count (tabCounts.new).
+    if (t === "other") {
+      const now = Math.floor(Date.now() / 1000);
+      void setPreferences({
+        tabSeen: { promotions: now, social: now, updates: now },
+      });
+    }
   };
 
-  // ── Server query ──────────────────────────────────────────────────────
+  // ── Server query (every filter, date and sort runs on the server) ─────
   const recipientFromTo =
     parsed.to && o.knownInboxes.includes(parsed.to.toLowerCase())
       ? parsed.to.toLowerCase()
       : undefined;
+  const showFocusTabs = o.focusedInbox && folder === "inbox" && !label && !q;
   const query = useMemo(() => {
     const searching = !!q;
     const fq = folderQuery(folder);
@@ -151,49 +138,62 @@ export function useOutlookMail() {
       sequenced?: boolean;
       unread?: boolean;
     } = searching && !scopeCurrent && !parsed.folder ? { folder: "all" } : fq;
-    if (searching && parsed.flagged) base.folder = "starred";
+    const f = filterQuery(filter);
     return {
       ...base,
       recipient: recipientFromTo ?? label,
       q: parsed.text || undefined,
-      unread:
-        base.unread ||
-        filter === "unread" ||
-        parsed.unread === true ||
-        undefined,
-      hasAttachment:
-        filter === "files" || parsed.hasAttachment === true || undefined,
+      unread: base.unread || f.unread || parsed.unread || undefined,
+      hasAttachment: f.hasAttachment || parsed.hasAttachment || undefined,
+      starred: f.starred || parsed.flagged || undefined,
+      pinned: f.pinned,
       from: parsed.from || undefined,
+      subject: parsed.subject || undefined,
+      after: parsed.after,
+      before: parsed.before,
+      sort: serverSort(sort),
+      categories: showFocusTabs
+        ? focusTab === "focused"
+          ? (["primary"] as MailCategory[])
+          : (["promotions", "social", "updates"] as MailCategory[])
+        : undefined,
+      withTabCounts: showFocusTabs || undefined,
     };
-  }, [folder, label, q, scopeCurrent, parsed, filter, recipientFromTo]);
+  }, [
+    folder,
+    label,
+    q,
+    scopeCurrent,
+    parsed,
+    filter,
+    recipientFromTo,
+    sort,
+    showFocusTabs,
+    focusTab,
+  ]);
 
-  const list = useOutlookList(query, folder !== "deleted");
+  const list = useOutlookList(query);
 
-  // ── Filters, Focused/Other, grouping ──────────────────────────────────
-  const filtered = useMemo(() => {
-    let rows = applyFilter(list.items, filter);
-    if (parsed.after) rows = rows.filter((r) => r.lastEmailAt >= parsed.after!);
-    if (parsed.before)
-      rows = rows.filter((r) => r.lastEmailAt < parsed.before!);
-    if (parsed.unread === false) rows = rows.filter((r) => r.unreadCount === 0);
-    if (parsed.flagged === false) rows = rows.filter((r) => !r.starred);
-    if (parsed.hasAttachment === false)
-      rows = rows.filter((r) => !r.hasAttachment);
-    return rows;
-  }, [list.items, filter, parsed]);
-
-  const showFocusTabs = o.focusedInbox && folder === "inbox" && !label && !q;
-  const focusSplit = useMemo(() => splitFocused(filtered), [filtered]);
-  const visible = showFocusTabs
-    ? focusTab === "focused"
-      ? focusSplit.focused
-      : focusSplit.other
-    : filtered;
-  const otherUnread = focusSplit.other.filter((i) => i.unreadCount > 0);
+  // Focused / Other counts come from the server (withTabCounts).
+  const tc = list.tabCounts;
+  const otherUnreadCount = tc
+    ? tc.promotions.unread + tc.social.unread + tc.updates.unread
+    : 0;
+  const otherNewCount = tc
+    ? tc.promotions.new + tc.social.new + tc.updates.new
+    : 0;
+  const visible = list.items;
+  const filtered = visible;
 
   const groups = useMemo(
     () =>
-      groupRows(visible, sort, itemTitle, new Date(), folder === "inbox" && !q),
+      groupRows(
+        visible,
+        sort as ListSort,
+        itemTitle,
+        new Date(),
+        folder === "inbox" && !q && sort === "date",
+      ),
     [visible, sort, folder, q],
   );
   const order = useMemo(
@@ -320,6 +320,16 @@ export function useOutlookMail() {
     },
     [params, setParams, navigate, routeParams.personId],
   );
+
+  // Undo send on a reply reopens that conversation if the user moved on.
+  useEffect(() => {
+    const on = (e: Event) => {
+      const key = (e as CustomEvent<string>).detail;
+      if (key && key !== openKey) setOpen(key);
+    };
+    window.addEventListener(REPLY_REOPEN_EVENT, on);
+    return () => window.removeEventListener(REPLY_REOPEN_EVENT, on);
+  }, [openKey, setOpen]);
 
   // Outlook opens the top conversation when a folder loads, so the reading
   // pane and ribbon are live. It is not marked read until the user acts.
@@ -505,6 +515,9 @@ export function useOutlookMail() {
   // ── Actions ───────────────────────────────────────────────────────────
   const serverFolder = query.folder;
   const leaves = (patch: StatePatch): boolean => {
+    // Deleted Items hides a row everywhere else; Restore takes it out of Trash.
+    if (serverFolder === "trash") return patch.trashed === false;
+    if (patch.trashed) return true;
     if (serverFolder === "inbox")
       return !!patch.archived || (patch.snoozedUntil ?? null) !== null;
     if (serverFolder === "archive") return patch.archived === false;
@@ -620,13 +633,39 @@ export function useOutlookMail() {
       if (items.some((i) => i.unreadCount > 0)) ops.markRead(items);
       else void ops.markUnread(items);
     },
-    delete: async (items: GroupedItem[], opts?: { skipConfirm?: boolean }) => {
+    /** Delete = move to Deleted Items (per-user Trash), with Undo. */
+    delete: (items: GroupedItem[]) => {
+      if (serverFolder === "trash") return void ops.deleteForever(items);
+      change(
+        items,
+        { trashed: true },
+        "Delete",
+        n(
+          items,
+          "Moved to Deleted Items",
+          "conversations moved to Deleted Items",
+        ),
+      );
+    },
+    /** Take rows out of Deleted Items. */
+    restore: (items: GroupedItem[]) =>
+      change(
+        items,
+        { trashed: false },
+        "Restore",
+        n(items, "Restored", "conversations restored"),
+      ),
+    /** Permanent delete (people only; the server can't purge a group). */
+    deleteForever: async (
+      items: GroupedItem[],
+      opts?: { skipConfirm?: boolean },
+    ) => {
       const people = items.filter((i) => i.type === "person");
       if (people.length === 0) {
         showToast({
           kind: "warning",
-          message: "Group conversations can't be deleted",
-          description: "Archive them instead.",
+          message: "Group conversations can't be deleted permanently",
+          description: "They stay in Deleted Items until restored.",
         });
         return;
       }
@@ -637,15 +676,54 @@ export function useOutlookMail() {
           (people.length === 1
             ? `Permanently delete the conversation with ${itemTitle(people[0])}?`
             : `Permanently delete ${people.length} conversations?`) +
-            " There is no Deleted Items folder here, so this can't be undone." +
+            " This can't be undone." +
             (skipped
-              ? ` (${skipped} group conversation(s) will be skipped.)`
+              ? ` (${skipped} group conversation(s) will stay in Deleted Items.)`
               : ""),
         )
       )
         return;
       openNeighbour(people);
       await list.deletePeople(people);
+    },
+    /** Empty Deleted Items: permanently delete every person in Trash. */
+    emptyTrash: async () => {
+      await emptyTrash();
+      list.refresh();
+    },
+    /** Outlook "Always move to Focused / Other" (a per-user sender override). */
+    setFocus: async (items: GroupedItem[], where: "focused" | "other") => {
+      const senders = [...new Set(items.flatMap(senderAddresses))];
+      if (!senders.length) return;
+      try {
+        await setCategoryOverride(
+          senders,
+          where === "focused" ? "primary" : "promotions",
+        );
+        const label = where === "focused" ? "Focused" : "Other";
+        showToast({
+          kind: "info",
+          message:
+            senders.length === 1
+              ? `Mail from ${senders[0]} will always go to ${label}`
+              : `Mail from ${senders.length} senders will always go to ${label}`,
+          action: {
+            label: "Undo",
+            onClick: (dismiss) => {
+              dismiss();
+              void setCategoryOverride(senders, null).then(() =>
+                list.refresh(),
+              );
+            },
+          },
+        });
+        list.refresh();
+      } catch (e) {
+        showToast({
+          kind: "error",
+          message: e instanceof Error ? e.message : "Couldn't move",
+        });
+      }
     },
     block: async (item: GroupedItem) => {
       if (item.type !== "person") {
@@ -674,47 +752,50 @@ export function useOutlookMail() {
         });
       }
     },
-    /** Mark every unread row in a folder read (default: this view). */
+    /** Mark every unread row in a folder read on the server (default: this view). */
     markAllRead: async (target?: FolderTarget) => {
-      const fq = target ? folderQuery(target.folder) : query;
-      const recipient = target ? target.label : query.recipient;
-      const rows: GroupedItem[] = [];
+      const base = target
+        ? { ...folderQuery(target.folder), recipient: target.label }
+        : (({ sort: _s, categories, withTabCounts: _w, ...rest }) => ({
+            ...rest,
+            category: categories?.length === 1 ? categories[0] : undefined,
+          }))(query);
       try {
-        for (let page = 1; page <= 10; page++) {
-          const res = await fetchGroupedPeople({
-            ...fq,
-            recipient,
-            unread: true,
-            page,
-            limit: 100,
-          });
-          rows.push(...res.data);
-          if (rows.length >= res.total || res.data.length === 0) break;
-        }
+        // "Other" spans three categories; mark each.
+        const cats =
+          !target && query.categories && query.categories.length > 1
+            ? query.categories
+            : [undefined];
+        let count = 0;
+        for (const c of cats)
+          count += await markFolderRead(c ? { ...base, category: c } : base);
+        list.refresh();
+        showToast({
+          kind: count ? "success" : "info",
+          message: count
+            ? `Marked ${count} conversation${count === 1 ? "" : "s"} as read`
+            : "Everything here is already read",
+        });
       } catch {
         showToast({ kind: "error", message: "Couldn't mark all as read" });
-        return;
       }
-      if (!rows.length) {
-        showToast({ kind: "info", message: "Everything here is already read" });
-        return;
-      }
-      await list.markRead(rows);
-      list.refresh();
-      showToast({
-        kind: "success",
-        message: `Marked ${rows.length} conversation${rows.length === 1 ? "" : "s"} as read`,
-      });
     },
     /** Outlook Sweep: archive or delete everything in the Inbox from a sender. */
     sweep: async (sender: string, action: "archive" | "delete") => {
-      const res = await fetchGroupedPeople({
-        folder: "inbox",
-        recipient: label,
-        from: sender.replace(/^@/, ""),
-        limit: 100,
-      });
-      const rows = sweepSelection(res.data, sender);
+      // Every Inbox row whose sender matches (server pages, exact match).
+      const all: GroupedItem[] = [];
+      for (let page = 1; page <= 50; page++) {
+        const res = await fetchGroupedPeople({
+          folder: "inbox",
+          recipient: label,
+          from: sender.replace(/^@/, ""),
+          page,
+          limit: 100,
+        });
+        all.push(...res.data);
+        if (all.length >= res.total || res.data.length === 0) break;
+      }
+      const rows = sweepSelection(all, sender);
       if (!rows.length) {
         showToast({
           kind: "info",
@@ -741,7 +822,7 @@ export function useOutlookMail() {
         });
         list.refresh();
       } else {
-        await ops.delete(rows, { skipConfirm: true });
+        ops.delete(rows);
       }
       return rows.length;
     },
@@ -753,7 +834,7 @@ export function useOutlookMail() {
         case "archive":
           return ops.archive(items);
         case "deleted":
-          return void ops.delete(items);
+          return ops.delete(items);
         case "flagged":
           return ops.flag(items, true);
         case "snoozed":
@@ -826,8 +907,9 @@ export function useOutlookMail() {
     focusTab,
     setFocusTab,
     showFocusTabs,
-    focusSplit,
-    otherUnread,
+    otherUnreadCount,
+    otherNewCount,
+    tabCounts: tc,
     list,
     allItems: list.items,
     filtered,

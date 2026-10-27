@@ -22,7 +22,6 @@ import {
   ReplyAll,
   Rows3,
   Settings,
-  ShieldAlert,
   SquarePen,
   Trash2,
   Undo2,
@@ -170,6 +169,7 @@ export default function Ribbon({
   const allPinned = !none && t.every((i) => i.pinned);
   const anyUnread = t.some((i) => i.unreadCount > 0);
   const personTarget = t.length === 1 && t[0].type === "person" ? t[0] : null;
+  const inTrash = mail.folder === "deleted";
 
   const readingPaneMenu = (
     <MenuRadioGroup
@@ -229,14 +229,17 @@ export default function Ribbon({
   const home: RibbonItem[] = [
     {
       id: "delete",
-      width: 76,
+      width: inTrash ? 128 : 76,
       compact: 40,
       separatorBefore: true,
       node: (
         <RBtn
           compact
           icon={<Trash2 size={18} />}
-          label="Delete"
+          label={inTrash ? "Delete forever" : "Delete"}
+          title={
+            inTrash ? "Delete permanently" : "Move to Deleted Items (Delete)"
+          }
           disabled={none}
           onClick={() => void mail.ops.delete(t)}
         />
@@ -247,49 +250,92 @@ export default function Ribbon({
           disabled={none}
           onSelect={() => void mail.ops.delete(t)}
         >
-          Delete
+          {inTrash ? "Delete forever" : "Delete"}
         </MenuItem>
       ),
     },
-    {
-      id: "archive",
-      width: 80,
-      compact: 40,
-      node: (
-        <RBtn
-          compact
-          icon={<Archive size={18} />}
-          label="Archive"
-          disabled={none}
-          onClick={() => mail.ops.archive(t)}
-        />
-      ),
-      menu: (
-        <MenuItem
-          icon={<Archive size={16} />}
-          disabled={none}
-          onSelect={() => mail.ops.archive(t)}
-        >
-          Archive
-        </MenuItem>
-      ),
-    },
+    inTrash
+      ? {
+          id: "archive",
+          width: 84,
+          compact: 40,
+          node: (
+            <RBtn
+              compact
+              icon={<Undo2 size={18} />}
+              label="Restore"
+              title="Move back out of Deleted Items"
+              disabled={none}
+              onClick={() => mail.ops.restore(t)}
+            />
+          ),
+          menu: (
+            <MenuItem
+              icon={<Undo2 size={16} />}
+              disabled={none}
+              onSelect={() => mail.ops.restore(t)}
+            >
+              Restore
+            </MenuItem>
+          ),
+        }
+      : {
+          id: "archive",
+          width: 80,
+          compact: 40,
+          node: (
+            <RBtn
+              compact
+              icon={<Archive size={18} />}
+              label="Archive"
+              disabled={none}
+              onClick={() => mail.ops.archive(t)}
+            />
+          ),
+          menu: (
+            <MenuItem
+              icon={<Archive size={16} />}
+              disabled={none}
+              onSelect={() => mail.ops.archive(t)}
+            >
+              Archive
+            </MenuItem>
+          ),
+        },
+    ...(inTrash
+      ? [
+          {
+            id: "empty",
+            width: 120,
+            node: (
+              <RBtn
+                icon={<Trash2 size={18} />}
+                label="Empty folder"
+                title="Permanently delete everything in Deleted Items"
+                onClick={() => void mail.ops.emptyTrash()}
+              />
+            ),
+            menu: (
+              <MenuItem
+                icon={<Trash2 size={16} />}
+                onSelect={() => void mail.ops.emptyTrash()}
+              >
+                Empty folder
+              </MenuItem>
+            ),
+          } as RibbonItem,
+        ]
+      : []),
     {
       id: "report",
-      width: 88,
+      width: 120,
       node: (
-        <RMenuBtn
-          icon={<ShieldAlert size={18} />}
-          label="Report"
+        <RBtn
+          icon={<Ban size={18} />}
+          label="Block sender"
           disabled={!personTarget}
-        >
-          <MenuItem
-            icon={<Ban size={16} />}
-            onSelect={() => personTarget && void mail.ops.block(personTarget)}
-          >
-            Block sender
-          </MenuItem>
-        </RMenuBtn>
+          onClick={() => personTarget && void mail.ops.block(personTarget)}
+        />
       ),
       menu: (
         <MenuItem
@@ -573,25 +619,31 @@ export default function Ribbon({
         </MenuItem>
       ),
     },
-    {
-      id: "allread",
-      width: 132,
-      node: (
-        <RBtn
-          icon={<MailCheck size={18} />}
-          label="Mark all as read"
-          onClick={() => mail.ops.markAllRead()}
-        />
-      ),
-      menu: (
-        <MenuItem
-          icon={<MailCheck size={16} />}
-          onSelect={() => mail.ops.markAllRead()}
-        >
-          Mark all as read
-        </MenuItem>
-      ),
-    },
+    // Read state is about received mail; it doesn't apply to Sent Items,
+    // Drafts or Deleted Items.
+    ...(["sent", "drafts", "deleted"].includes(mail.folder)
+      ? []
+      : [
+          {
+            id: "allread",
+            width: 132,
+            node: (
+              <RBtn
+                icon={<MailCheck size={18} />}
+                label="Mark all as read"
+                onClick={() => mail.ops.markAllRead()}
+              />
+            ),
+            menu: (
+              <MenuItem
+                icon={<MailCheck size={16} />}
+                onSelect={() => mail.ops.markAllRead()}
+              >
+                Mark all as read
+              </MenuItem>
+            ),
+          },
+        ]),
     {
       id: "filter",
       width: 80,

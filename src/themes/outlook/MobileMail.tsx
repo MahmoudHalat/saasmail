@@ -34,7 +34,7 @@ import { useNavigate } from "react-router-dom";
 import { useOutlook } from "./context";
 import Conversation, { sendConversationCommand } from "./Conversation";
 import ComposeForm from "./ComposeForm";
-import InlineReply, { type ReplyMode } from "./InlineReply";
+import InlineReply, { type ReplyState } from "./InlineReply";
 import {
   Menu,
   MenuContent,
@@ -600,10 +600,7 @@ function MobileConversation({
     null,
   );
   const conv = useConversation(item, mail.label);
-  const [replyState, setReplyState] = useState<{
-    email: Email;
-    mode: ReplyMode;
-  } | null>(null);
+  const [replyState, setReplyState] = useState<ReplyState | null>(null);
   const { senderIdentities } = useIdentities();
   const subject = conv.emails[0]?.subject?.trim() || rowSubject(item);
   const unread = item.unreadCount > 0;
@@ -755,11 +752,29 @@ function MobileConversation({
             onSelect: () => void mail.ops.block(item),
           },
           {
+            id: "focus",
+            label: "Always move to Focused",
+            icon: <InboxIcon size={20} />,
+            onSelect: () => void mail.ops.setFocus([item], "focused"),
+          },
+          {
+            id: "other",
+            label: "Always move to Other",
+            icon: <InboxIcon size={20} />,
+            onSelect: () => void mail.ops.setFocus([item], "other"),
+          },
+          {
+            id: "restore",
+            label: "Restore",
+            icon: <InboxIcon size={20} />,
+            hidden: mail.folder !== "deleted",
+            onSelect: () => mail.ops.restore([item]),
+          },
+          {
             id: "delete",
-            label: "Delete",
+            label: mail.folder === "deleted" ? "Delete forever" : "Delete",
             icon: <Trash2 size={20} />,
             danger: true,
-            hidden: item.type !== "person",
             onSelect: () => void mail.ops.delete([item]),
           },
         ]}
@@ -809,9 +824,11 @@ function MobileConversation({
       />
       {replyState && (
         <InlineReply
-          key={`${replyState.email.id}:${replyState.mode}`}
+          key={`${replyState.email.id}:${replyState.mode}:${replyState.initial ? "again" : ""}`}
           email={replyState.email}
           mode={replyState.mode}
+          initial={replyState.initial}
+          itemKey={`${item.type}:${item.id}`}
           counterpart={counterpart}
           onClose={() => setReplyState(null)}
           onSent={() => void conv.reload(true)}
@@ -884,9 +901,7 @@ export default function MobileMail({ mail }: { mail: OutlookMail }) {
     [rows, mail.selected],
   );
   const anyUnread = selectedItems.some((i) => i.unreadCount > 0);
-  const otherUnread = mail.focusSplit.other.filter(
-    (i) => i.unreadCount > 0,
-  ).length;
+  const otherUnread = mail.otherUnreadCount;
 
   const act = (fn: () => void) => {
     fn();
@@ -1153,6 +1168,9 @@ export default function MobileMail({ mail }: { mail: OutlookMail }) {
         <ComposeForm
           key={o.compose.id}
           prefill={o.compose.prefill}
+          initialFiles={o.compose.files}
+          initialError={o.compose.error}
+          onReopen={(p, x) => o.openCompose(p, x)}
           onClose={o.closeCompose}
           variant="mobile"
         />

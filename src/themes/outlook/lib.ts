@@ -73,8 +73,8 @@ export function folderQuery(id: OlFolderId): {
     case "unread":
       return { folder: "all", unread: true };
     case "deleted":
-      // Delete is permanent here; the folder exists as a drop target.
-      return { folder: "all" };
+      // Per-user Trash.
+      return { folder: "trash" };
   }
 }
 
@@ -103,13 +103,8 @@ export function parseFavorite(
 
 // ── List filters and sort ────────────────────────────────────────────────
 
-export type ListFilter =
-  | "all"
-  | "unread"
-  | "flagged"
-  | "tome"
-  | "files"
-  | "pinned";
+export type ListFilter = "all" | "unread" | "flagged" | "files" | "pinned";
+/** Grouping keys groupRows understands. */
 export type ListSort =
   | "date"
   | "from"
@@ -117,44 +112,47 @@ export type ListSort =
   | "flag"
   | "unread"
   | "files";
+/** Arrange-by choices the server can sort by. */
+export type ArrangeBy = "date" | "unread" | "files";
+export const ARRANGE_OPTIONS: ArrangeBy[] = ["date", "unread", "files"];
 
 export const FILTER_LABELS: Record<ListFilter, string> = {
   all: "All",
   unread: "Unread",
   flagged: "Flagged",
-  tome: "To me",
   files: "Has files",
   pinned: "Pinned",
 };
 
-export const SORT_LABELS: Record<ListSort, string> = {
+export const SORT_LABELS: Record<ArrangeBy, string> = {
   date: "Date",
-  from: "From",
-  category: "Category",
-  flag: "Flag status",
   unread: "Unread",
   files: "Has attachments",
 };
 
-/** Client-side filters (unread is also sent to the server). */
-export function applyFilter<T extends GroupedItem>(
-  items: T[],
-  filter: ListFilter,
-): T[] {
-  switch (filter) {
-    case "all":
-      return items;
+/** Server sort for an arrange-by choice. */
+export function serverSort(a: ArrangeBy): "recency" | "unread" | "attachments" {
+  return a === "unread" ? "unread" : a === "files" ? "attachments" : "recency";
+}
+
+/** Server query fields for a list filter (every filter runs on the server). */
+export function filterQuery(f: ListFilter): {
+  unread?: boolean;
+  starred?: boolean;
+  hasAttachment?: boolean;
+  pinned?: boolean;
+} {
+  switch (f) {
     case "unread":
-      return items.filter((i) => i.unreadCount > 0);
+      return { unread: true };
     case "flagged":
-      return items.filter((i) => i.starred);
+      return { starred: true };
     case "files":
-      return items.filter((i) => i.hasAttachment > 0);
+      return { hasAttachment: true };
     case "pinned":
-      return items.filter((i) => i.pinned);
-    case "tome":
-      // Mail addressed to us one-to-one (not group threads we are on).
-      return items.filter((i) => i.type === "person");
+      return { pinned: true };
+    default:
+      return {};
   }
 }
 
@@ -534,7 +532,8 @@ export const SHORTCUT_HELP: Array<{
   { group: "Mail", keys: "Ctrl+R or R", label: "Reply" },
   { group: "Mail", keys: "Ctrl+Shift+R", label: "Reply all" },
   { group: "Mail", keys: "Ctrl+Shift+F or F", label: "Forward" },
-  { group: "Mail", keys: "Delete / Shift+Delete", label: "Delete (permanent)" },
+  { group: "Mail", keys: "Delete", label: "Delete (to Deleted Items)" },
+  { group: "Mail", keys: "Shift+Delete", label: "Delete permanently" },
   { group: "Mail", keys: "E", label: "Archive" },
   { group: "Mail", keys: "Ctrl+Shift+V", label: "Move to folder" },
   { group: "Mail", keys: "Insert", label: "Flag / unflag" },
@@ -620,9 +619,10 @@ export interface ParsedQuery {
   text: string;
   from?: string;
   to?: string;
-  hasAttachment?: boolean;
-  unread?: boolean;
-  flagged?: boolean;
+  subject?: string;
+  hasAttachment?: true;
+  unread?: true;
+  flagged?: true;
   folder?: OlFolderId;
   /** received:>=YYYY-MM-DD style bounds, unix seconds. */
   after?: number;
@@ -644,7 +644,7 @@ const YES = new Set(["yes", "true", "1"]);
 const NO = new Set(["no", "false", "0"]);
 
 /**
- * Parse Outlook search keywords: from:, to:, hasattachments:yes|no,
+ * Parse Outlook search keywords: from:, to:, subject:, hasattachments:yes|no,
  * isread:yes|no, isflagged:yes|no, folder:<name>, received:<date>,
  * received>=<date>, received<=<date>. Quoted values are allowed.
  */
@@ -673,18 +673,23 @@ export function parseSearchQuery(raw: string): ParsedQuery {
       case "to":
         out.to = val;
         break;
+      case "subject":
+        out.subject = val;
+        break;
+      // Only the forms the server can filter on are keywords; the
+      // negatives (isread:yes, isflagged:no, hasattachments:no) stay text.
       case "hasattachments":
       case "hasattachment":
         if (YES.has(lv)) out.hasAttachment = true;
-        else if (NO.has(lv)) out.hasAttachment = false;
+        else rest.push(m[0]);
         break;
       case "isread":
-        if (YES.has(lv)) out.unread = false;
-        else if (NO.has(lv)) out.unread = true;
+        if (NO.has(lv)) out.unread = true;
+        else rest.push(m[0]);
         break;
       case "isflagged":
         if (YES.has(lv)) out.flagged = true;
-        else if (NO.has(lv)) out.flagged = false;
+        else rest.push(m[0]);
         break;
       case "folder":
         if (FOLDER_ALIASES[lv.replace(/\s+/g, "")])
@@ -715,11 +720,10 @@ export function buildSearchQuery(p: ParsedQuery): string {
   const parts: string[] = [];
   if (p.from) parts.push(`from:${q(p.from)}`);
   if (p.to) parts.push(`to:${q(p.to)}`);
-  if (p.hasAttachment !== undefined)
-    parts.push(`hasattachments:${p.hasAttachment ? "yes" : "no"}`);
-  if (p.unread !== undefined) parts.push(`isread:${p.unread ? "no" : "yes"}`);
-  if (p.flagged !== undefined)
-    parts.push(`isflagged:${p.flagged ? "yes" : "no"}`);
+  if (p.subject) parts.push(`subject:${q(p.subject)}`);
+  if (p.hasAttachment) parts.push("hasattachments:yes");
+  if (p.unread) parts.push("isread:no");
+  if (p.flagged) parts.push("isflagged:yes");
   if (p.folder) parts.push(`folder:${p.folder}`);
   if (p.after !== undefined) {
     const d = new Date(p.after * 1000).toISOString().slice(0, 10);

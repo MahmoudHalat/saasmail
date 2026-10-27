@@ -13,6 +13,7 @@ import {
   Paperclip,
   Pin,
   Trash2,
+  Undo2,
   Users,
 } from "lucide-react";
 import {
@@ -26,6 +27,8 @@ import { cn } from "@/lib/utils";
 import {
   FILTER_LABELS,
   SORT_LABELS,
+  ARRANGE_OPTIONS,
+  type ArrangeBy,
   formatListTime,
   groupParticipants,
   type ListFilter,
@@ -112,7 +115,7 @@ export function EmptyFolder({
           : other
             ? "Newsletters, promotions and automated updates land here, out of your way."
             : title === "Deleted Items"
-              ? "Deleting is permanent here, so this folder stays empty. Drop messages on it to delete them."
+              ? "Nothing in Deleted Items. Deleted conversations wait here until you restore them or empty the folder."
               : title === "Inbox"
                 ? "Nothing new here. Enjoy the quiet."
                 : `Nothing in ${title}.`}
@@ -226,7 +229,8 @@ function Row({
   const ref = useRef<HTMLDivElement>(null);
   const multi = mail.checkMode || mail.selected.size > 1;
   const isGroup = item.type === "group";
-  const canExpand = o.showAs === "conversations" && item.totalCount > 1;
+  const inTrash = mail.folder === "deleted";
+  const canExpand = item.totalCount > 1;
   const expanded = canExpand && mail.expanded.has(key);
   const identities = new Map(
     (mail.list.stats?.senderIdentities ?? []).map((s) => [
@@ -251,16 +255,24 @@ function Row({
         return (
           <IconButton
             key={a}
-            label="Delete"
+            label={inTrash ? "Delete forever" : "Delete"}
             size="sm"
             onClick={() => void mail.ops.delete([item])}
-            disabled={item.type !== "person"}
           >
             <Trash2 size={16} />
           </IconButton>
         );
       case "archive":
-        return (
+        return inTrash ? (
+          <IconButton
+            key={a}
+            label="Restore"
+            size="sm"
+            onClick={() => mail.ops.restore([item])}
+          >
+            <Undo2 size={16} />
+          </IconButton>
+        ) : (
           <IconButton
             key={a}
             label="Archive"
@@ -508,9 +520,6 @@ export default function MessageList({
   }, [mail.hasMore, mail.loadMore, mail]);
 
   const empty = !list.loading && !list.error && mail.visible.length === 0;
-  const otherNames = [
-    ...new Set(mail.otherUnread.map((i) => rowTitle(i).split(";")[0])),
-  ].slice(0, 3);
 
   const jumpTo = (label: string) => {
     const el = scrollRef.current?.querySelector<HTMLElement>(
@@ -550,9 +559,12 @@ export default function MessageList({
                   onClick={() => mail.setFocusTab(t)}
                 >
                   {t === "focused" ? "Focused" : "Other"}
-                  {t === "other" && mail.otherUnread.length > 0 && (
-                    <span className="ol-pivot-count">
-                      {mail.otherUnread.length}
+                  {t === "other" && mail.otherUnreadCount > 0 && (
+                    <span
+                      className="ol-pivot-count"
+                      aria-label={`${mail.otherUnreadCount} unread`}
+                    >
+                      {mail.otherUnreadCount}
                     </span>
                   )}
                 </button>
@@ -614,12 +626,6 @@ export default function MessageList({
                   </MenuRadioItem>
                 ))}
               </MenuRadioGroup>
-              <MenuItem
-                disabled
-                title="Not available: @mentions aren't tracked"
-              >
-                Mentions me
-              </MenuItem>
             </MenuContent>
           </Menu>
           <Menu>
@@ -632,35 +638,13 @@ export default function MessageList({
               <MenuLabel>Arrange by</MenuLabel>
               <MenuRadioGroup
                 value={mail.sort}
-                onValueChange={(v) => mail.setSort(v as ListSort)}
+                onValueChange={(v) => mail.setSort(v as ArrangeBy)}
               >
-                {(Object.keys(SORT_LABELS) as ListSort[]).map((s) => (
+                {ARRANGE_OPTIONS.map((s) => (
                   <MenuRadioItem key={s} value={s}>
                     {SORT_LABELS[s]}
                   </MenuRadioItem>
                 ))}
-              </MenuRadioGroup>
-              <MenuItem
-                disabled
-                title="Not available: message size isn't stored"
-              >
-                Size
-              </MenuItem>
-              <MenuItem disabled title="Not available: importance isn't stored">
-                Importance
-              </MenuItem>
-              <MenuSeparator />
-              <MenuLabel>Show as</MenuLabel>
-              <MenuRadioGroup
-                value={o.showAs}
-                onValueChange={(v) =>
-                  o.setLayout({ showAs: v as typeof o.showAs })
-                }
-              >
-                <MenuRadioItem value="conversations">
-                  Conversations
-                </MenuRadioItem>
-                <MenuRadioItem value="messages">Messages</MenuRadioItem>
               </MenuRadioGroup>
             </MenuContent>
           </Menu>
@@ -680,15 +664,15 @@ export default function MessageList({
       )}
       {mail.showFocusTabs &&
         mail.focusTab === "focused" &&
-        otherNames.length > 0 && (
+        mail.otherNewCount > 0 && (
           <button
             type="button"
             className="ol-other-hint"
             onClick={() => mail.setFocusTab("other")}
           >
-            <span className="text-text-secondary">Other:</span> New messages
-            from {otherNames.join(", ")}
-            {mail.otherUnread.length > otherNames.length ? " and others" : ""}
+            <span className="text-text-secondary">Other:</span>{" "}
+            {mail.otherNewCount} new message
+            {mail.otherNewCount === 1 ? "" : "s"} since you last looked
           </button>
         )}
 

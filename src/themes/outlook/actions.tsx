@@ -60,7 +60,6 @@ const MOVE_TARGETS: Array<{
     id: "deleted",
     label: "Deleted Items",
     icon: <Trash2 size={18} />,
-    hint: "Deletes permanently",
   },
 ];
 
@@ -273,7 +272,7 @@ function SweepDialog({
                 onChange={() => setAction("delete")}
               />
               <span className="ol-radio-dot" aria-hidden />
-              <span>Delete all messages from the Inbox (permanent)</span>
+              <span>Move all messages from the Inbox to Deleted Items</span>
             </label>
           </fieldset>
           <div className="mt-5 flex justify-end gap-2">
@@ -284,18 +283,9 @@ function SweepDialog({
             </Dialog.Close>
             <button
               type="button"
-              className={
-                action === "delete" ? "ol-btn-danger" : "ol-btn-primary"
-              }
+              className="ol-btn-primary"
               disabled={!sender.trim() || busy || count === 0}
               onClick={async () => {
-                if (
-                  action === "delete" &&
-                  !window.confirm(
-                    `Permanently delete ${count ?? "all"} conversation(s) from ${sender}? This can't be undone.`,
-                  )
-                )
-                  return;
                 setBusy(true);
                 try {
                   await mail.ops.sweep(sender.trim(), action);
@@ -305,7 +295,7 @@ function SweepDialog({
                 }
               }}
             >
-              {action === "delete" ? "Delete" : "Sweep"}
+              Sweep
             </button>
           </div>
         </Dialog.Content>

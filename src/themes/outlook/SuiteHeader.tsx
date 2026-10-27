@@ -301,8 +301,8 @@ function SearchBox() {
             </button>
           ))}
           <div className="ol-search-tip">
-            Tip: from:name, hasattachments:yes, isread:no, isflagged:yes,
-            folder:archive, received&gt;=2026-01-01
+            Tip: from:name, subject:word, hasattachments:yes, isread:no,
+            isflagged:yes, folder:archive, received&gt;=2026-01-01
           </div>
           {q.trim() && (
             <button

@@ -80,6 +80,8 @@ export interface FolderListProps {
   onFavoritesOpen: (open: boolean) => void;
   onToggleFavorite: (key: string) => void;
   onMarkAllRead: (t: FolderTarget) => void;
+  /** Permanently delete everything in Deleted Items. */
+  onEmptyTrash?: () => void;
   /** Rows dropped on a folder (desktop drag and drop). */
   onDropRows?: (dest: DropTarget) => void;
   /** Touch layout (mobile drawer): bigger rows, no drag. */
@@ -233,6 +235,7 @@ export default function FolderList(props: FolderListProps) {
     onToggleFavorite,
     onMarkAllRead,
     onDropRows,
+    onEmptyTrash,
   } = props;
   const o = useOutlook();
   const accountOpen = o.accountOpen;
@@ -372,13 +375,14 @@ export default function FolderList(props: FolderListProps) {
             >
               Open
             </MenuItem>
-            <MenuItem
-              icon={<MailCheck size={16} />}
-              disabled={menu.target.folder === "deleted"}
-              onSelect={() => onMarkAllRead(menu.target)}
-            >
-              Mark all as read
-            </MenuItem>
+            {!["deleted", "sent", "drafts"].includes(menu.target.folder) && (
+              <MenuItem
+                icon={<MailCheck size={16} />}
+                onSelect={() => onMarkAllRead(menu.target)}
+              >
+                Mark all as read
+              </MenuItem>
+            )}
             <MenuSeparator />
             <MenuItem
               icon={inFav ? <StarOff size={16} /> : <Star size={16} />}
@@ -386,14 +390,18 @@ export default function FolderList(props: FolderListProps) {
             >
               {inFav ? "Remove from Favorites" : "Add to Favorites"}
             </MenuItem>
-            <MenuSeparator />
-            <MenuItem
-              icon={<Trash2 size={16} />}
-              disabled
-              title="Deleting is permanent here, so there is nothing to empty"
-            >
-              Empty folder
-            </MenuItem>
+            {menu.target.folder === "deleted" && onEmptyTrash && (
+              <>
+                <MenuSeparator />
+                <MenuItem
+                  icon={<Trash2 size={16} />}
+                  danger
+                  onSelect={onEmptyTrash}
+                >
+                  Empty folder
+                </MenuItem>
+              </>
+            )}
           </>
         )}
       </PointMenu>

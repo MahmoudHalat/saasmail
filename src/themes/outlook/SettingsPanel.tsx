@@ -11,6 +11,8 @@ import {
   type ReadingPanePos,
 } from "./context";
 import { SWIPE_LABELS, type SwipeAction } from "./lib";
+import { UNDO_SEND_CHOICES } from "@/lib/undo-send";
+import { useUndoSendSetting } from "./sendUndo";
 
 const QUICK_LABELS: Record<QuickAction, string> = {
   delete: "Delete",
@@ -58,6 +60,7 @@ export function SettingsBody({ onDone }: { onDone?: () => void }) {
   const navigate = useNavigate();
   const { colorMode, density, uiTheme, setPreferences } = usePreferences();
   const o = useOutlook();
+  const [common, setCommon] = useUndoSendSetting();
   const { readingPane, conversationView, spacious, setLayout } = o;
   const densityValue =
     density === "compact" ? "compact" : spacious ? "spacious" : "cozy";
@@ -155,6 +158,27 @@ export function SettingsBody({ onDone }: { onDone?: () => void }) {
       </section>
 
       <section>
+        <h3 className="ol-settings-h">Undo send</h3>
+        <label className="ol-field-row">
+          <span>Cancel sending within</span>
+          <select
+            className="ol-select"
+            value={common.undoSendSeconds}
+            aria-label="Undo send delay"
+            onChange={(e) =>
+              setCommon({ undoSendSeconds: Number(e.target.value) })
+            }
+          >
+            {UNDO_SEND_CHOICES.map((n) => (
+              <option key={n} value={n}>
+                {n === 0 ? "Off" : `${n} seconds`}
+              </option>
+            ))}
+          </select>
+        </label>
+      </section>
+
+      <section>
         <h3 className="ol-settings-h">Focused Inbox</h3>
         <label className="ol-switch">
           <input
@@ -166,28 +190,6 @@ export function SettingsBody({ onDone }: { onDone?: () => void }) {
           <span className="ol-switch-track" aria-hidden />
           <span>Sort messages into Focused and Other</span>
         </label>
-      </section>
-
-      <section>
-        <h3 className="ol-settings-h">Show as</h3>
-        <div className="flex flex-col gap-1">
-          <Radio
-            name="ol-showas"
-            value="conversations"
-            current={o.showAs}
-            onChange={(v) => setLayout({ showAs: v })}
-          >
-            Conversations
-          </Radio>
-          <Radio
-            name="ol-showas"
-            value="messages"
-            current={o.showAs}
-            onChange={(v) => setLayout({ showAs: v })}
-          >
-            Messages
-          </Radio>
-        </div>
       </section>
 
       {!o.isMobile && (

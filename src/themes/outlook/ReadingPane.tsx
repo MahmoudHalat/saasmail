@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import {
+  MoreHorizontal,
   Archive,
   ArrowLeft,
   Clock,
@@ -15,8 +16,9 @@ import type { ComposePrefill } from "@/pages/ComposeModal";
 import { useOutlook } from "./context";
 import Conversation from "./Conversation";
 import ComposeForm from "./ComposeForm";
-import type { ReplyMode } from "./InlineReply";
+import type { ReplyState } from "./InlineReply";
 import { Menu, MenuContent, MenuTrigger } from "./Menu";
+import RowMenu from "./RowMenu";
 import { rowSubject } from "./MessageList";
 import { SnoozeMenuItems } from "./Snooze";
 import { useMailUi } from "./actions";
@@ -139,10 +141,7 @@ export default function ReadingPane({
   const item = mail.selected.size > 1 ? null : mail.openedItem;
   const conv = useConversation(item, mail.label);
   const { senderIdentities } = useIdentities();
-  const [replyState, setReplyState] = useState<{
-    email: Email;
-    mode: ReplyMode;
-  } | null>(null);
+  const [replyState, setReplyState] = useState<ReplyState | null>(null);
 
   // Outlook marks a message read when you select it. The conversation it
   // opens by itself when a folder loads stays unread until you act on it.
@@ -161,6 +160,9 @@ export default function ReadingPane({
         <ComposeForm
           key={o.compose.id}
           prefill={o.compose.prefill}
+          initialFiles={o.compose.files}
+          initialError={o.compose.error}
+          onReopen={(p, x) => o.openCompose(p, x)}
           onClose={o.closeCompose}
           variant="pane"
         />
@@ -254,6 +256,21 @@ export default function ReadingPane({
               className={item.pinned ? "fill-current" : undefined}
             />
           </button>
+          <Menu>
+            <MenuTrigger asChild>
+              <button
+                type="button"
+                className="ol-icon-btn"
+                aria-label="More actions"
+                title="More actions"
+              >
+                <MoreHorizontal size={18} />
+              </button>
+            </MenuTrigger>
+            <MenuContent align="end">
+              <RowMenu items={[item]} mail={mail} />
+            </MenuContent>
+          </Menu>
         </div>
       </div>
       <div className="ol-reading-scroll">

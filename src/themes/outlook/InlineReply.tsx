@@ -4,12 +4,13 @@ import TiptapEditor from "@/components/TiptapEditor";
 import CcInput from "@/components/CcInput";
 import AttachmentPicker from "@/components/AttachmentPicker";
 import AttachmentChips from "@/components/AttachmentChips";
-import { replyToEmail, type CcEntry, type Email } from "@/lib/api";
+import { deleteDraft, replyToEmail, type CcEntry, type Email } from "@/lib/api";
+import { sendWithUndo } from "@/lib/undo-send";
+import { useUndoSendSetting } from "./sendUndo";
 import { useDraftAutosave } from "@/lib/use-draft-autosave";
 import { dispatchEmailSent } from "@/lib/email-events";
 import { getFromLabel } from "@/lib/format";
 import { sanitizeEmailHtml } from "@/lib/sanitize-html";
-import { showToast } from "@/lib/toast";
 import { cn } from "@/lib/utils";
 import {
   inboxOfEmail,
@@ -23,6 +24,41 @@ const ATTACHMENT_CAP_BYTES = 25 * 1024 * 1024;
 
 export type ReplyMode = "reply" | "replyAll";
 
+/** Reply content restored after Undo send or a failed send. */
+export interface ReplyInitial {
+  fromAddress: string;
+  cc: CcEntry[];
+  bodyHtml: string;
+  bodyText: string;
+  files: File[];
+  error?: string;
+}
+
+export interface ReplyState {
+  email: Email;
+  mode: ReplyMode;
+  initial?: ReplyInitial;
+}
+
+/**
+ * Reopen a reply after Undo send: the reading pane for that conversation
+ * picks it up (opening the conversation first if the user moved on).
+ */
+let pendingReopen: { itemKey: string; state: ReplyState } | null = null;
+export const REPLY_REOPEN_EVENT = "ol:reply-reopen";
+export function reopenReply(itemKey: string, state: ReplyState) {
+  pendingReopen = { itemKey, state };
+  window.dispatchEvent(
+    new CustomEvent(REPLY_REOPEN_EVENT, { detail: itemKey }),
+  );
+}
+export function takePendingReopen(itemKey: string): ReplyState | null {
+  if (!pendingReopen || pendingReopen.itemKey !== itemKey) return null;
+  const s = pendingReopen.state;
+  pendingReopen = null;
+  return s;
+}
+
 /**
  * Outlook's inline reply: a compose card at the top of the reading pane
  * (desktop) or a full-screen sheet (mobile). Sends through the same reply
@@ -35,9 +71,14 @@ export default function InlineReply({
   onClose,
   onSent,
   variant = "pane",
+  initial,
+  itemKey,
 }: {
   email: Email;
   mode: ReplyMode;
+  initial?: ReplyInitial;
+  /** The conversation this reply belongs to (for reopening on Undo). */
+  itemKey: string;
   /** Who the reply goes to (person name/email), for the To line. */
   counterpart: string;
   onClose: () => void;
@@ -50,13 +91,16 @@ export default function InlineReply({
     () => (ownInbox ? [ownInbox] : recipients),
     [ownInbox, recipients],
   );
-  const [fromAddress, setFromAddress] = useState(ownInbox ?? "");
-  const [cc, setCc] = useState<CcEntry[]>([]);
-  const [bodyHtml, setBodyHtml] = useState("");
-  const [bodyText, setBodyText] = useState("");
-  const [files, setFiles] = useState<File[]>([]);
+  const [undoSettings] = useUndoSendSetting();
+  const [fromAddress, setFromAddress] = useState(
+    initial?.fromAddress ?? ownInbox ?? "",
+  );
+  const [cc, setCc] = useState<CcEntry[]>(initial?.cc ?? []);
+  const [bodyHtml, setBodyHtml] = useState(initial?.bodyHtml ?? "");
+  const [bodyText, setBodyText] = useState(initial?.bodyText ?? "");
+  const [files, setFiles] = useState<File[]>(initial?.files ?? []);
   const [sending, setSending] = useState(false);
-  const [error, setError] = useState("");
+  const [error, setError] = useState(initial?.error ?? "");
   const restored = useRef(false);
   const cardRef = useRef<HTMLDivElement>(null);
 
@@ -66,7 +110,7 @@ export default function InlineReply({
 
   // Reply all: copy the original Cc minus our own inboxes.
   useEffect(() => {
-    if (mode !== "replyAll" || restored.current) return;
+    if (mode !== "replyAll" || restored.current || initial) return;
     const ours = new Set(recipients.map((r) => r.toLowerCase()));
     setCc((email.cc ?? []).filter((c) => !ours.has(c.email.toLowerCase())));
   }, [mode, email, recipients]);
@@ -96,7 +140,7 @@ export default function InlineReply({
     contextKey: `reply:${email.id}`,
     enabled: true,
     isEmpty: bodyIsEmpty,
-    restore: true,
+    restore: !initial,
     values: { fromAddress, cc, bodyHtml, bodyText, replyToEmailId: email.id },
     onRestore: (d) => {
       restored.current = true;
@@ -109,35 +153,58 @@ export default function InlineReply({
 
   const total = files.reduce((s, f) => s + f.size, 0);
 
-  async function send() {
+  function send() {
     if (bodyIsEmpty) {
       setError("Write a reply before sending.");
       return;
     }
     if (total > ATTACHMENT_CAP_BYTES) return;
     setSending(true);
-    setError("");
-    try {
-      const finalBody = safeSignatureHtml
-        ? `${bodyHtml}<div data-signature>${safeSignatureHtml}</div>`
-        : bodyHtml;
-      await replyToEmail(email.id, {
-        bodyHtml: finalBody,
-        ...(bodyText.trim() ? { bodyText } : {}),
-        fromAddress,
-        ...(cc.length ? { cc } : {}),
-        ...(files.length ? { files: files.map((file) => ({ file })) } : {}),
-      });
-      dispatchEmailSent({ fromAddress, to: counterpart, origin: "reply" });
-      clearDraft();
-      showToast({ kind: "success", message: "Reply sent" });
-      onSent();
-      onClose();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to send reply");
-    } finally {
-      setSending(false);
-    }
+    const finalBody = safeSignatureHtml
+      ? `${bodyHtml}<div data-signature>${safeSignatureHtml}</div>`
+      : bodyHtml;
+    const snapshot: ReplyInitial = {
+      fromAddress,
+      cc,
+      bodyHtml,
+      bodyText,
+      files,
+    };
+    const emailId = email.id;
+    const payload = {
+      bodyHtml: finalBody,
+      ...(bodyText.trim() ? { bodyText } : {}),
+      fromAddress,
+      ...(cc.length ? { cc } : {}),
+      ...(files.length ? { files: files.map((file) => ({ file })) } : {}),
+    };
+    // Close at once; the draft is kept (saved on close) until it really goes.
+    onClose();
+    sendWithUndo({
+      seconds: undoSettings.undoSendSeconds,
+      label: "Sending reply…",
+      send: async () => {
+        await replyToEmail(emailId, payload);
+        dispatchEmailSent({ fromAddress, to: counterpart, origin: "reply" });
+      },
+      onUndo: () => reopenReply(itemKey, { email, mode, initial: snapshot }),
+      onSent: () => {
+        onSent();
+        window.setTimeout(
+          () => void deleteDraft(`reply:${emailId}`).catch(() => {}),
+          1500,
+        );
+      },
+      onError: (e) =>
+        reopenReply(itemKey, {
+          email,
+          mode,
+          initial: {
+            ...snapshot,
+            error: e instanceof Error ? e.message : "Reply not sent",
+          },
+        }),
+    });
   }
 
   function discard() {

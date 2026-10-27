@@ -1,4 +1,6 @@
 import {
+  Inbox,
+  Undo2,
   Archive,
   Ban,
   Clock,
@@ -63,6 +65,7 @@ export default function RowMenu({
   const allFlagged = items.every((i) => i.starred);
   const allPinned = items.every((i) => i.pinned);
   const person = single?.type === "person" ? single : null;
+  const inTrash = mail.folder === "deleted";
 
   const replyCmd = (cmd: ConversationCommand) => {
     if (!single) return;
@@ -101,21 +104,43 @@ export default function RowMenu({
           <MenuSeparator />
         </>
       )}
-      <MenuItem
-        icon={<Trash2 size={16} />}
-        onSelect={() => void mail.ops.delete(items)}
-        shortcut="Del"
-        disabled={!items.some((i) => i.type === "person")}
-      >
-        Delete
-      </MenuItem>
-      <MenuItem
-        icon={<Archive size={16} />}
-        onSelect={() => mail.ops.archive(items)}
-        shortcut="E"
-      >
-        Archive
-      </MenuItem>
+      {inTrash ? (
+        <>
+          <MenuItem
+            icon={<Undo2 size={16} />}
+            onSelect={() => mail.ops.restore(items)}
+          >
+            Restore
+          </MenuItem>
+          {items.some((i) => i.type === "person") && (
+            <MenuItem
+              icon={<Trash2 size={16} />}
+              danger
+              onSelect={() => void mail.ops.deleteForever(items)}
+              shortcut="Del"
+            >
+              Delete forever
+            </MenuItem>
+          )}
+        </>
+      ) : (
+        <>
+          <MenuItem
+            icon={<Trash2 size={16} />}
+            onSelect={() => mail.ops.delete(items)}
+            shortcut="Del"
+          >
+            Delete
+          </MenuItem>
+          <MenuItem
+            icon={<Archive size={16} />}
+            onSelect={() => mail.ops.archive(items)}
+            shortcut="E"
+          >
+            Archive
+          </MenuItem>
+        </>
+      )}
       <MenuSub>
         <MenuSubTrigger icon={<FolderInput size={16} />}>Move</MenuSubTrigger>
         <MenuSubContent>
@@ -189,51 +214,60 @@ export default function RowMenu({
         </MenuSubContent>
       </MenuSub>
       <MenuSeparator />
-      <MenuSub>
-        <MenuSubTrigger icon={<Ban size={16} />}>Block</MenuSubTrigger>
-        <MenuSubContent>
-          <MenuItem
-            icon={<Ban size={16} />}
-            disabled={!person}
-            onSelect={() => person && void mail.ops.block(person)}
-          >
-            Block sender
-          </MenuItem>
-        </MenuSubContent>
-      </MenuSub>
+      {person && (
+        <MenuItem
+          icon={<Ban size={16} />}
+          onSelect={() => void mail.ops.block(person)}
+        >
+          Block sender
+        </MenuItem>
+      )}
+      <MenuItem
+        icon={<Inbox size={16} />}
+        onSelect={() => void mail.ops.setFocus(items, "focused")}
+      >
+        Always move to Focused
+      </MenuItem>
+      <MenuItem
+        icon={<Inbox size={16} />}
+        onSelect={() => void mail.ops.setFocus(items, "other")}
+      >
+        Always move to Other
+      </MenuItem>
       <MenuItem
         icon={<Brush size={16} />}
         onSelect={() => ui.requestSweep(items)}
       >
         Sweep…
       </MenuItem>
-      <MenuSub>
-        <MenuSubTrigger icon={<Search size={16} />}>
-          Find related
-        </MenuSubTrigger>
-        <MenuSubContent>
-          <MenuItem
-            disabled={!person}
-            onSelect={() =>
-              person && mail.setQuery(`from:${person.email}`, "all")
-            }
-          >
-            Messages from sender
-          </MenuItem>
-          <MenuItem
-            disabled={!single?.latestSubject}
-            onSelect={() =>
-              single?.latestSubject &&
-              mail.setQuery(
-                single.latestSubject.replace(/^\s*((re|fw|fwd)\s*:\s*)+/i, ""),
-                "all",
-              )
-            }
-          >
-            Messages in this conversation
-          </MenuItem>
-        </MenuSubContent>
-      </MenuSub>
+      {(person || single?.latestSubject) && (
+        <MenuSub>
+          <MenuSubTrigger icon={<Search size={16} />}>
+            Find related
+          </MenuSubTrigger>
+          <MenuSubContent>
+            {person && (
+              <MenuItem
+                onSelect={() => mail.setQuery(`from:${person.email}`, "all")}
+              >
+                Messages from sender
+              </MenuItem>
+            )}
+            {single?.latestSubject && (
+              <MenuItem
+                onSelect={() =>
+                  mail.setQuery(
+                    `subject:"${single.latestSubject!.replace(/^\s*((re|fw|fwd)\s*:\s*)+/i, "").replace(/"/g, "")}"`,
+                    "all",
+                  )
+                }
+              >
+                Messages in this conversation
+              </MenuItem>
+            )}
+          </MenuSubContent>
+        </MenuSub>
+      )}
       {single && (
         <>
           <MenuSeparator />

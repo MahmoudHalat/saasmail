@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import type { GroupedItem } from "@/lib/api";
 import {
-  applyFilter,
+  filterQuery,
+  serverSort,
   commandForKey,
   dateBucket,
   folderQuery,
@@ -118,16 +119,13 @@ describe("splitFocused", () => {
 });
 
 describe("filters and folders", () => {
-  it("filters rows client-side", () => {
-    const items = [
-      row("a", { unreadCount: 1 }),
-      row("b", { hasAttachment: 1 }),
-      row("c", { starred: true }),
-    ];
-    expect(applyFilter(items, "unread").map((i) => i.id)).toEqual(["a"]);
-    expect(applyFilter(items, "files").map((i) => i.id)).toEqual(["b"]);
-    expect(applyFilter(items, "flagged").map((i) => i.id)).toEqual(["c"]);
-    expect(applyFilter(items, "all")).toHaveLength(3);
+  it("sends every list filter to the server", () => {
+    expect(filterQuery("unread")).toEqual({ unread: true });
+    expect(filterQuery("flagged")).toEqual({ starred: true });
+    expect(filterQuery("files")).toEqual({ hasAttachment: true });
+    expect(filterQuery("pinned")).toEqual({ pinned: true });
+    expect(filterQuery("all")).toEqual({});
+    expect(serverSort("files")).toBe("attachments");
   });
 
   it("maps Outlook folders to server queries", () => {
@@ -215,9 +213,13 @@ describe("parseSearchQuery", () => {
   });
 
   it("handles isread:yes, unknown keywords and dates", () => {
-    const p = parseSearchQuery("isread:yes subject:hello received>=2026-01-01");
-    expect(p.unread).toBe(false);
-    expect(p.text).toBe("subject:hello");
+    const p = parseSearchQuery(
+      "isread:yes subject:hello received>=2026-01-01 foo:bar",
+    );
+    // The server can't filter "read only", so that stays plain text.
+    expect(p.unread).toBeUndefined();
+    expect(p.subject).toBe("hello");
+    expect(p.text).toBe("isread:yes foo:bar");
     expect(p.after).toBe(Math.floor(Date.parse("2026-01-01") / 1000));
   });
 

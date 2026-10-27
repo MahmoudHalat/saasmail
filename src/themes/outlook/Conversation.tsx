@@ -45,7 +45,12 @@ import {
   MenuTrigger,
 } from "./Menu";
 import { Avatar, IconButton } from "./ui";
-import InlineReply, { type ReplyMode } from "./InlineReply";
+import InlineReply, {
+  REPLY_REOPEN_EVENT,
+  takePendingReopen,
+  type ReplyMode,
+  type ReplyState,
+} from "./InlineReply";
 import { inboxOfEmail, useIdentities } from "./useConversation";
 
 /** Commands the ribbon / shortcuts send to the open conversation. */
@@ -168,7 +173,7 @@ function SourceDialog({
         <Dialog.Content className="ol-dialog flex max-h-[85dvh] w-[min(94vw,860px)] flex-col">
           <div className="flex items-center justify-between pb-2">
             <Dialog.Title className="text-[18px] font-semibold text-text-primary">
-              Message source
+              Message details
             </Dialog.Title>
             <div className="flex gap-1">
               <button
@@ -497,10 +502,7 @@ function MessageCard({
                   Print
                 </MenuItem>
                 <MenuItem icon={<FileCode2 size={16} />} onSelect={onRawSource}>
-                  View message source
-                </MenuItem>
-                <MenuItem icon={<Code size={16} />} onSelect={onSource}>
-                  Show original
+                  Message details
                 </MenuItem>
                 {onOpenWindow && (
                   <MenuItem
@@ -521,7 +523,7 @@ function MessageCard({
                   danger
                   onSelect={onDelete}
                 >
-                  Delete message
+                  Delete this message permanently
                 </MenuItem>
               </MenuContent>
             </Menu>
@@ -608,8 +610,8 @@ export default function Conversation({
   onCompose: (prefill: ComposePrefill) => void;
   onBlock: () => void;
   variant?: "pane" | "mobile";
-  replyState: { email: Email; mode: ReplyMode } | null;
-  setReplyState: (s: { email: Email; mode: ReplyMode } | null) => void;
+  replyState: ReplyState | null;
+  setReplyState: (s: ReplyState | null) => void;
 }) {
   const { party } = useParties(item);
   const location = useLocation();
@@ -669,6 +671,18 @@ export default function Conversation({
     if (cmd === "forward") forward(emails[0]);
     else setReplyState({ email: latest, mode: cmd });
   };
+  // A reply reopened after Undo send / a failed send.
+  useEffect(() => {
+    const check = () => {
+      if (emails.length === 0) return;
+      const st = takePendingReopen(key);
+      if (st) setReplyState(st);
+    };
+    check();
+    window.addEventListener(REPLY_REOPEN_EVENT, check);
+    return () => window.removeEventListener(REPLY_REOPEN_EVENT, check);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [emails, key]);
   useEffect(() => {
     if (pendingCommand && pendingCommand.key === key && emails.length > 0) {
       const { cmd } = pendingCommand;
@@ -748,9 +762,11 @@ export default function Conversation({
     <div className={cn("ol-conv", variant === "mobile" && "ol-conv-mobile")}>
       {replyState && variant === "pane" && (
         <InlineReply
-          key={`${replyState.email.id}:${replyState.mode}`}
+          key={`${replyState.email.id}:${replyState.mode}:${replyState.initial ? "again" : ""}`}
           email={replyState.email}
           mode={replyState.mode}
+          initial={replyState.initial}
+          itemKey={key}
           counterpart={counterpart}
           onClose={() => setReplyState(null)}
           onSent={reload}
