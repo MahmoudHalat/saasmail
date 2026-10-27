@@ -74,10 +74,11 @@ function useShortcuts(mail: OutlookMail) {
         case "forward":
           return conv(cmd);
         case "delete":
-          // Delete → Deleted Items; Shift+Delete deletes permanently (asks).
+          // Delete → Deleted Items; Shift+Delete deletes permanently
+          // (asks) for admins. Others can't purge, so it's a plain Delete.
           if (t.length)
             run(() =>
-              e.shiftKey
+              e.shiftKey && mail.canDeleteForever
                 ? void mail.ops.deleteForever(t)
                 : void mail.ops.delete(t),
             );
@@ -304,7 +305,11 @@ export default function DesktopMail({ mail }: { mail: OutlookMail }) {
                 onFavoritesOpen={(v) => o.setLayout({ favoritesOpen: v })}
                 onToggleFavorite={o.toggleFavorite}
                 onMarkAllRead={(t) => void mail.ops.markAllRead(t)}
-                onEmptyTrash={() => void mail.ops.emptyTrash()}
+                onEmptyTrash={
+                  mail.canDeleteForever
+                    ? () => void mail.ops.emptyTrash()
+                    : undefined
+                }
                 onDropRows={onDropRows}
               />
             </aside>

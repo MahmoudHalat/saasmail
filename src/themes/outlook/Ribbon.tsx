@@ -238,16 +238,20 @@ export default function Ribbon({
           icon={<Trash2 size={18} />}
           label={inTrash ? "Delete forever" : "Delete"}
           title={
-            inTrash ? "Delete permanently" : "Move to Deleted Items (Delete)"
+            inTrash
+              ? mail.canDeleteForever
+                ? "Delete permanently, with their mail, for the whole team"
+                : "Only an admin can delete permanently"
+              : "Move to Deleted Items (Delete)"
           }
-          disabled={none}
+          disabled={none || (inTrash && !mail.canDeleteForever)}
           onClick={() => void mail.ops.delete(t)}
         />
       ),
       menu: (
         <MenuItem
           icon={<Trash2 size={16} />}
-          disabled={none}
+          disabled={none || (inTrash && !mail.canDeleteForever)}
           onSelect={() => void mail.ops.delete(t)}
         >
           {inTrash ? "Delete forever" : "Delete"}
@@ -302,7 +306,7 @@ export default function Ribbon({
             </MenuItem>
           ),
         },
-    ...(inTrash
+    ...(inTrash && mail.canDeleteForever
       ? [
           {
             id: "empty",
@@ -311,7 +315,7 @@ export default function Ribbon({
               <RBtn
                 icon={<Trash2 size={18} />}
                 label="Empty folder"
-                title="Permanently delete everything in Deleted Items"
+                title="Permanently delete everyone in Deleted Items and their mail, for the whole team"
                 onClick={() => void mail.ops.emptyTrash()}
               />
             ),
@@ -417,6 +421,15 @@ export default function Ribbon({
               onSelect={() => mail.ops.archive(t)}
             >
               Archive
+            </MenuItem>
+            <MenuSeparator />
+            <MenuItem
+              icon={<FolderInput size={16} />}
+              disabled={none}
+              onSelect={() => ui.requestMove(t)}
+              shortcut="Ctrl+Shift+V"
+            >
+              Other folder…
             </MenuItem>
           </MenuSubContent>
         </MenuSub>
@@ -907,22 +920,6 @@ export default function Ribbon({
               <SquarePen size={18} aria-hidden />
               New mail
             </button>
-            <Menu>
-              <MenuTrigger asChild>
-                <button
-                  type="button"
-                  className="ol-split-chev"
-                  aria-label="More new items"
-                >
-                  <ChevronDown size={14} />
-                </button>
-              </MenuTrigger>
-              <MenuContent align="start">
-                <MenuItem icon={<Mail size={16} />} onSelect={onNewMail}>
-                  Mail
-                </MenuItem>
-              </MenuContent>
-            </Menu>
           </div>
         )}
         {shown.map((it) => (

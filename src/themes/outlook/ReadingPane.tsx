@@ -74,6 +74,8 @@ function MultiSelected({ mail }: { mail: OutlookMail }) {
         <button
           type="button"
           className="ol-btn-outline"
+          // In Deleted Items, Delete is permanent: admins only.
+          disabled={mail.folder === "deleted" && !mail.canDeleteForever}
           onClick={() => void mail.ops.delete(items)}
         >
           <Trash2 size={16} aria-hidden /> Delete

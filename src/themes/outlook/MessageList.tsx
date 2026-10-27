@@ -252,6 +252,8 @@ function Row({
   const quick = (a: QuickAction) => {
     switch (a) {
       case "delete":
+        // In Deleted Items this is permanent: admins only, people only.
+        if (inTrash && (!mail.canDeleteForever || isGroup)) return null;
         return (
           <IconButton
             key={a}

@@ -217,7 +217,12 @@ function MobileDrawer() {
                   favoritesOpen={o.favoritesOpen}
                   onFavoritesOpen={(v) => o.setLayout({ favoritesOpen: v })}
                   onToggleFavorite={o.toggleFavorite}
-                  onEmptyTrash={() => void emptyTrash()}
+                  onEmptyTrash={
+                    // Permanent delete is admin-only on the server.
+                    session?.user?.role === "admin"
+                      ? () => void emptyTrash()
+                      : undefined
+                  }
                   onMarkAllRead={(t) =>
                     void markFolderRead(t).then(() =>
                       fetchStats()

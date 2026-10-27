@@ -65,6 +65,8 @@ export default function RowMenu({
   const allFlagged = items.every((i) => i.starred);
   const allPinned = items.every((i) => i.pinned);
   const person = single?.type === "person" ? single : null;
+  // Sender overrides (Focused / Other) only apply to person rows.
+  const anyPerson = items.some((i) => i.type === "person");
   const inTrash = mail.folder === "deleted";
 
   const replyCmd = (cmd: ConversationCommand) => {
@@ -112,7 +114,7 @@ export default function RowMenu({
           >
             Restore
           </MenuItem>
-          {items.some((i) => i.type === "person") && (
+          {anyPerson && mail.canDeleteForever && (
             <MenuItem
               icon={<Trash2 size={16} />}
               danger
@@ -172,7 +174,6 @@ export default function RowMenu({
           Flag
         </MenuSubTrigger>
         <MenuSubContent>
-          <MenuItem onSelect={() => flagAt("today")}>Today</MenuItem>
           <MenuItem onSelect={() => flagAt("tomorrow")} shortcut="remind 8 AM">
             Tomorrow
           </MenuItem>
@@ -222,18 +223,22 @@ export default function RowMenu({
           Block sender
         </MenuItem>
       )}
-      <MenuItem
-        icon={<Inbox size={16} />}
-        onSelect={() => void mail.ops.setFocus(items, "focused")}
-      >
-        Always move to Focused
-      </MenuItem>
-      <MenuItem
-        icon={<Inbox size={16} />}
-        onSelect={() => void mail.ops.setFocus(items, "other")}
-      >
-        Always move to Other
-      </MenuItem>
+      {anyPerson && (
+        <>
+          <MenuItem
+            icon={<Inbox size={16} />}
+            onSelect={() => void mail.ops.setFocus(items, "focused")}
+          >
+            Always move to Focused
+          </MenuItem>
+          <MenuItem
+            icon={<Inbox size={16} />}
+            onSelect={() => void mail.ops.setFocus(items, "other")}
+          >
+            Always move to Other
+          </MenuItem>
+        </>
+      )}
       <MenuItem
         icon={<Brush size={16} />}
         onSelect={() => ui.requestSweep(items)}

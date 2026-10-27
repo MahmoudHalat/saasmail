@@ -533,7 +533,7 @@ export const SHORTCUT_HELP: Array<{
   { group: "Mail", keys: "Ctrl+Shift+R", label: "Reply all" },
   { group: "Mail", keys: "Ctrl+Shift+F or F", label: "Forward" },
   { group: "Mail", keys: "Delete", label: "Delete (to Deleted Items)" },
-  { group: "Mail", keys: "Shift+Delete", label: "Delete permanently" },
+  { group: "Mail", keys: "Shift+Delete", label: "Delete permanently (admins)" },
   { group: "Mail", keys: "E", label: "Archive" },
   { group: "Mail", keys: "Ctrl+Shift+V", label: "Move to folder" },
   { group: "Mail", keys: "Insert", label: "Flag / unflag" },
@@ -635,9 +635,14 @@ const FOLDER_ALIASES: Record<string, OlFolderId> = {
   sentitems: "sent",
   drafts: "drafts",
   archive: "archive",
+  archived: "archive",
   snoozed: "snoozed",
   flagged: "flagged",
   sequenced: "sequenced",
+  unread: "unread",
+  deleted: "deleted",
+  deleteditems: "deleted",
+  trash: "deleted",
 };
 
 const YES = new Set(["yes", "true", "1"]);
@@ -691,10 +696,14 @@ export function parseSearchQuery(raw: string): ParsedQuery {
         if (YES.has(lv)) out.flagged = true;
         else rest.push(m[0]);
         break;
-      case "folder":
-        if (FOLDER_ALIASES[lv.replace(/\s+/g, "")])
-          out.folder = FOLDER_ALIASES[lv.replace(/\s+/g, "")];
+      case "folder": {
+        // An unknown folder stays in the text, so it shows rather than
+        // silently vanishing from the search.
+        const f = FOLDER_ALIASES[lv.replace(/\s+/g, "")];
+        if (f) out.folder = f;
+        else rest.push(m[0]);
         break;
+      }
       case "received": {
         const t = day(val);
         if (t === undefined) break;
@@ -725,9 +734,20 @@ export function buildSearchQuery(p: ParsedQuery): string {
   if (p.unread) parts.push("isread:no");
   if (p.flagged) parts.push("isflagged:yes");
   if (p.folder) parts.push(`folder:${p.folder}`);
-  if (p.after !== undefined) {
-    const d = new Date(p.after * 1000).toISOString().slice(0, 10);
-    parts.push(`received>=${d}`);
+  // Dates are written as UTC days, the way the parser reads them;
+  // `before` is exclusive (the day after a received<= bound).
+  const day = (t: number) => new Date(t * 1000).toISOString().slice(0, 10);
+  if (
+    p.after !== undefined &&
+    p.before !== undefined &&
+    p.before - p.after === 86400 &&
+    p.after % 86400 === 0
+  ) {
+    parts.push(`received:${day(p.after)}`);
+  } else {
+    if (p.after !== undefined) parts.push(`received>=${day(p.after)}`);
+    if (p.before !== undefined)
+      parts.push(`received<=${day(p.before - 86400)}`);
   }
   if (p.text) parts.push(p.text);
   return parts.join(" ");
@@ -775,12 +795,13 @@ export function groupParticipants(
   return names.join("; ") || item.inbox;
 }
 
-// ── Flag with a reminder (Outlook's Flag ▸ Today / Tomorrow / …) ─────────
+// ── Flag with a reminder (Outlook's Flag ▸ Tomorrow / This week / …) ─────
 
+/** When a flag's reminder brings the row back (its snoozedUntil). */
 export function flagReminder(
-  when: "today" | "tomorrow" | "thisweek" | "nextweek",
+  when: "tomorrow" | "thisweek" | "nextweek",
   now: Date = new Date(),
-): number | null {
+): number {
   const at = (days: number, hour: number) => {
     const d = new Date(now);
     d.setDate(d.getDate() + days);
@@ -788,8 +809,6 @@ export function flagReminder(
     return Math.floor(d.getTime() / 1000);
   };
   switch (when) {
-    case "today":
-      return null; // flag only: due today, stays in the inbox
     case "tomorrow":
       return at(1, 8);
     case "thisweek": {

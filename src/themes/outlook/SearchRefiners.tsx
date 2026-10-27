@@ -41,9 +41,23 @@ export default function SearchRefiners({ mail }: { mail: OutlookMail }) {
     mail.setQuery(buildSearchQuery({ ...p, ...patch }));
   const identities = mail.list.stats?.senderIdentities ?? [];
   const now = Math.floor(Date.now() / 1000);
-  const dateLabel = p.after
-    ? `Since ${new Date(p.after * 1000).toLocaleDateString([], { month: "short", day: "numeric" })}`
-    : "Date";
+  // Typed dates are UTC days (received>=2026-01-01); show them that way.
+  const fmt = (t: number) =>
+    new Date(t * 1000).toLocaleDateString([], {
+      month: "short",
+      day: "numeric",
+      timeZone: "UTC",
+    });
+  const dateLabel =
+    p.after !== undefined && p.before !== undefined
+      ? p.before - p.after === DAY
+        ? `On ${fmt(p.after)}`
+        : `${fmt(p.after)} – ${fmt(p.before - DAY)}`
+      : p.after !== undefined
+        ? `Since ${fmt(p.after)}`
+        : p.before !== undefined
+          ? `Until ${fmt(p.before - DAY)}`
+          : "Date";
   const active = (on: boolean) => cn("ol-refiner", on && "ol-refiner-on");
 
   return (
@@ -51,7 +65,7 @@ export default function SearchRefiners({ mail }: { mail: OutlookMail }) {
       <span className="text-[13px] text-text-secondary">
         Results for{" "}
         <span className="font-semibold text-text-primary">
-          {p.text || "everything"}
+          {[p.text, mail.toAsText].filter(Boolean).join(" ") || "everything"}
         </span>
       </span>
       <Menu onOpenChange={(o) => o && setFromDraft(p.from ?? "")}>
@@ -92,9 +106,17 @@ export default function SearchRefiners({ mail }: { mail: OutlookMail }) {
       </Menu>
       <Menu>
         <MenuTrigger asChild>
-          <button type="button" className={active(!!p.to)}>
+          <button
+            type="button"
+            className={active(!!p.to)}
+            title={
+              mail.toAsText
+                ? `${mail.toAsText} isn't one of your inboxes, so it's searched as text`
+                : undefined
+            }
+          >
             <Mail size={14} aria-hidden />
-            {p.to ? `To: ${p.to}` : "To"}
+            {p.to ? `To: ${p.to}${mail.toAsText ? " (text)" : ""}` : "To"}
             <ChevronDown size={12} aria-hidden />
           </button>
         </MenuTrigger>
@@ -124,7 +146,10 @@ export default function SearchRefiners({ mail }: { mail: OutlookMail }) {
       </button>
       <Menu>
         <MenuTrigger asChild>
-          <button type="button" className={active(!!p.after)}>
+          <button
+            type="button"
+            className={active(p.after !== undefined || p.before !== undefined)}
+          >
             <CalendarDays size={14} aria-hidden />
             {dateLabel}
             <ChevronDown size={12} aria-hidden />
@@ -182,6 +207,8 @@ export default function SearchRefiners({ mail }: { mail: OutlookMail }) {
                 "archive",
                 "snoozed",
                 "flagged",
+                "unread",
+                "deleted",
               ] as OlFolderId[]
             ).map((f) => (
               <MenuRadioItem key={f} value={f}>

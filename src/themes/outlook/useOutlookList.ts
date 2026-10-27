@@ -17,8 +17,8 @@ import { onInboxRefresh } from "@/lib/inbox-events";
 import { showToast } from "@/lib/toast";
 
 /**
- * The Outlook message list. Same server API and optimistic behaviour as the
- * shared useMailList, plus what Outlook needs on top: the hasAttachment and
+ * The Outlook message list. Grouped rows with optimistic mail-state
+ * updates, plus what Outlook needs on top: the hasAttachment and
  * from filters, and pages that accumulate for infinite scroll (refreshes
  * reload every loaded page so rows never jump away under the user).
  */

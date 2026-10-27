@@ -18,6 +18,7 @@ import { markFolderRead } from "@/lib/folder-actions";
 import { emptyTrash } from "./folderOps";
 import { REPLY_REOPEN_EVENT } from "./InlineReply";
 import { usePreferences } from "@/lib/preferences";
+import { useSession } from "@/lib/auth-client";
 import { itemKey, itemRef, itemTitle } from "@/hooks/useMailList";
 import { showToast } from "@/lib/toast";
 import {
@@ -89,6 +90,10 @@ export function useOutlookMail() {
   const [params, setParams] = useSearchParams();
   const routeParams = useParams<{ inbox?: string; personId?: string }>();
   const o = useOutlook();
+  // Permanent delete (DELETE /api/people/:id) is admin-only on the server:
+  // it removes the person and their mail for the whole team.
+  const { data: session } = useSession();
+  const canDeleteForever = session?.user?.role === "admin";
 
   const urlFolder: OlFolderId = parseFolder(params.get("folder"));
   const label = params.get("label") || undefined;
@@ -128,6 +133,11 @@ export function useOutlookMail() {
     parsed.to && o.knownInboxes.includes(parsed.to.toLowerCase())
       ? parsed.to.toLowerCase()
       : undefined;
+  // A to: that isn't one of the team's inboxes can't be a recipient
+  // filter; search for it as text rather than silently dropping it.
+  const toAsText = parsed.to && !recipientFromTo ? parsed.to : undefined;
+  const searchText =
+    [parsed.text, toAsText].filter(Boolean).join(" ") || undefined;
   const showFocusTabs = o.focusedInbox && folder === "inbox" && !label && !q;
   const query = useMemo(() => {
     const searching = !!q;
@@ -142,7 +152,7 @@ export function useOutlookMail() {
     return {
       ...base,
       recipient: recipientFromTo ?? label,
-      q: parsed.text || undefined,
+      q: searchText,
       unread: base.unread || f.unread || parsed.unread || undefined,
       hasAttachment: f.hasAttachment || parsed.hasAttachment || undefined,
       starred: f.starred || parsed.flagged || undefined,
@@ -167,6 +177,7 @@ export function useOutlookMail() {
     parsed,
     filter,
     recipientFromTo,
+    searchText,
     sort,
     showFocusTabs,
     focusTab,
@@ -635,7 +646,15 @@ export function useOutlookMail() {
     },
     /** Delete = move to Deleted Items (per-user Trash), with Undo. */
     delete: (items: GroupedItem[]) => {
-      if (serverFolder === "trash") return void ops.deleteForever(items);
+      if (serverFolder === "trash") {
+        if (canDeleteForever) return void ops.deleteForever(items);
+        showToast({
+          kind: "info",
+          message: "Already in Deleted Items",
+          description: "Only an admin can delete conversations permanently.",
+        });
+        return;
+      }
       change(
         items,
         { trashed: true },
@@ -660,6 +679,13 @@ export function useOutlookMail() {
       items: GroupedItem[],
       opts?: { skipConfirm?: boolean },
     ) => {
+      if (!canDeleteForever) {
+        showToast({
+          kind: "warning",
+          message: "Only an admin can delete conversations permanently",
+        });
+        return;
+      }
       const people = items.filter((i) => i.type === "person");
       if (people.length === 0) {
         showToast({
@@ -674,9 +700,9 @@ export function useOutlookMail() {
         !opts?.skipConfirm &&
         !window.confirm(
           (people.length === 1
-            ? `Permanently delete the conversation with ${itemTitle(people[0])}?`
-            : `Permanently delete ${people.length} conversations?`) +
-            " This can't be undone." +
+            ? `Permanently delete ${itemTitle(people[0])} and all of their mail?`
+            : `Permanently delete ${people.length} people and all of their mail?`) +
+            " This removes it for everyone on the team and can't be undone." +
             (skipped
               ? ` (${skipped} group conversation(s) will stay in Deleted Items.)`
               : ""),
@@ -688,12 +714,19 @@ export function useOutlookMail() {
     },
     /** Empty Deleted Items: permanently delete every person in Trash. */
     emptyTrash: async () => {
+      if (!canDeleteForever) return;
       await emptyTrash();
       list.refresh();
     },
     /** Outlook "Always move to Focused / Other" (a per-user sender override). */
     setFocus: async (items: GroupedItem[], where: "focused" | "other") => {
-      const senders = [...new Set(items.flatMap(senderAddresses))];
+      // The server applies sender overrides to person rows only, so a
+      // group conversation's participants aren't touched.
+      const senders = [
+        ...new Set(
+          items.filter((i) => i.type === "person").flatMap(senderAddresses),
+        ),
+      ];
       if (!senders.length) return;
       try {
         await setCategoryOverride(
@@ -897,6 +930,7 @@ export function useOutlookMail() {
     label,
     q,
     parsed,
+    toAsText,
     scopeCurrent,
     popout,
     folderTitle,
@@ -911,6 +945,7 @@ export function useOutlookMail() {
     otherNewCount,
     tabCounts: tc,
     list,
+    canDeleteForever,
     allItems: list.items,
     filtered,
     visible,

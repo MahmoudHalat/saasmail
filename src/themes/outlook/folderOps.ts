@@ -28,7 +28,9 @@ export async function markFolderRead(t: FolderTarget): Promise<number> {
 
 /**
  * Empty Deleted Items: permanently delete every person in the user's Trash
- * (asks first). Group conversations can't be purged by the server and stay.
+ * and their mail, for the whole team (asks first; admin-only on the server,
+ * so callers offer it to admins only). Group conversations can't be purged
+ * by the server and stay.
  */
 export async function emptyTrash(): Promise<number> {
   try {
@@ -41,7 +43,7 @@ export async function emptyTrash(): Promise<number> {
     const groups = data.length - people.length;
     if (
       !window.confirm(
-        `Permanently delete ${people.length} conversation${people.length === 1 ? "" : "s"} in Deleted Items? This can't be undone.` +
+        `Permanently delete the ${people.length} ${people.length === 1 ? "person" : "people"} in Deleted Items and all of their mail? This removes it for everyone on the team and can't be undone.` +
           (groups
             ? ` ${groups} group conversation${groups === 1 ? "" : "s"} can't be deleted permanently and will stay.`
             : ""),

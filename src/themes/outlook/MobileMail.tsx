@@ -755,12 +755,14 @@ function MobileConversation({
             id: "focus",
             label: "Always move to Focused",
             icon: <InboxIcon size={20} />,
+            hidden: item.type !== "person",
             onSelect: () => void mail.ops.setFocus([item], "focused"),
           },
           {
             id: "other",
             label: "Always move to Other",
             icon: <InboxIcon size={20} />,
+            hidden: item.type !== "person",
             onSelect: () => void mail.ops.setFocus([item], "other"),
           },
           {
@@ -775,6 +777,10 @@ function MobileConversation({
             label: mail.folder === "deleted" ? "Delete forever" : "Delete",
             icon: <Trash2 size={20} />,
             danger: true,
+            // In Deleted Items, Delete is permanent: admins only.
+            hidden:
+              mail.folder === "deleted" &&
+              (!mail.canDeleteForever || item.type !== "person"),
             onSelect: () => void mail.ops.delete([item]),
           },
         ]}
@@ -1111,7 +1117,11 @@ export default function MobileMail({ mail }: { mail: OutlookMail }) {
           </button>
           <button
             type="button"
-            disabled={!selectedItems.length}
+            disabled={
+              !selectedItems.length ||
+              // In Deleted Items, Delete is permanent: admins only.
+              (mail.folder === "deleted" && !mail.canDeleteForever)
+            }
             onClick={() => act(() => void mail.ops.delete(selectedItems))}
           >
             <Trash2 size={22} aria-hidden />

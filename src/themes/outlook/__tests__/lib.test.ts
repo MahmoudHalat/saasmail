@@ -20,6 +20,7 @@ import {
   favoriteKey,
   parseFavorite,
   DEFAULT_FAVORITES,
+  flagReminder,
 } from "../lib";
 
 // Thu 22 Oct 2026, 14:00 local.
@@ -228,6 +229,53 @@ describe("parseSearchQuery", () => {
     expect(parseSearchQuery(buildSearchQuery(parseSearchQuery(q)))).toEqual(
       parseSearchQuery(q),
     );
+  });
+
+  it("round-trips both date bounds and exact days", () => {
+    for (const q of [
+      "received<=2026-02-10",
+      "received>=2026-01-01 received<=2026-02-10",
+      "received:2026-03-05",
+    ]) {
+      const p = parseSearchQuery(q);
+      expect(buildSearchQuery(p)).toBe(q);
+      expect(parseSearchQuery(buildSearchQuery(p))).toEqual(p);
+    }
+    // A refiner click must not erase a typed upper bound.
+    const p = parseSearchQuery("received<=2026-02-10");
+    expect(
+      parseSearchQuery(buildSearchQuery({ ...p, hasAttachment: true })),
+    ).toMatchObject({
+      before: p.before,
+      hasAttachment: true,
+    });
+    // An exact day stays a day, not "since".
+    expect(buildSearchQuery(parseSearchQuery("received:2026-03-05"))).toBe(
+      "received:2026-03-05",
+    );
+  });
+
+  it("maps folder aliases and keeps unknown folders as text", () => {
+    expect(parseSearchQuery("folder:trash").folder).toBe("deleted");
+    expect(parseSearchQuery('folder:"Deleted Items"').folder).toBe("deleted");
+    expect(parseSearchQuery("folder:deleted").folder).toBe("deleted");
+    expect(parseSearchQuery("folder:unread").folder).toBe("unread");
+    const p = parseSearchQuery("invoice folder:receipts");
+    expect(p.folder).toBeUndefined();
+    expect(p.text).toBe("invoice folder:receipts");
+    expect(buildSearchQuery(p)).toBe("invoice folder:receipts");
+  });
+});
+
+describe("flagReminder", () => {
+  // Wednesday 2026-10-21, 10:00 local.
+  const now = new Date(2026, 9, 21, 10, 0, 0);
+  const at = (d: number, h: number) =>
+    Math.floor(new Date(2026, 9, d, h, 0, 0).getTime() / 1000);
+  it("brings the row back at a real time for every option", () => {
+    expect(flagReminder("tomorrow", now)).toBe(at(22, 8));
+    expect(flagReminder("thisweek", now)).toBe(at(22, 8));
+    expect(flagReminder("nextweek", now)).toBe(at(26, 8));
   });
 });
 

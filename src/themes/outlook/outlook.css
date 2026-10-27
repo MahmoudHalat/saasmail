@@ -830,15 +830,7 @@
   font-weight: 600;
   white-space: nowrap;
 }
-.ol-split-chev {
-  display: inline-flex;
-  align-items: center;
-  padding: 0 8px;
-  border-left: 1px solid
-    color-mix(in srgb, var(--sm-on-accent) 35%, transparent);
-}
-.ol-split-main:hover,
-.ol-split-chev:hover {
+.ol-split-main:hover {
   background: var(--sm-accent-2);
 }
 .ol-split :focus-visible {
