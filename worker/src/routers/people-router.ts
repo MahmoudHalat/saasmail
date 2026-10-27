@@ -180,7 +180,7 @@ export function categorize(
   return "primary";
 }
 
-const GroupedQuerySchema = z.object({
+export const GroupedQuerySchema = z.object({
   q: z.string().optional().openapi({ description: "Search person name/email" }),
   recipient: z.string().optional().openapi({
     description: "Filter to people who have emailed this inbox address",
@@ -190,7 +190,8 @@ const GroupedQuerySchema = z.object({
     .optional()
     .openapi({ description: "Only people with unread emails" }),
   drafts: z.enum(["1", "true"]).optional().openapi({
-    description: "Only conversations where the current user has a reply draft",
+    description:
+      "Only conversations where the current user has a reply or forward draft",
   }),
   sequenced: z.enum(["1", "true"]).optional().openapi({
     description: "Only contacts currently enrolled in a sequence (active)",
@@ -292,17 +293,24 @@ const listGroupedPeopleRoute = createRoute({
   },
 });
 
-type GroupedQuery = z.infer<typeof GroupedQuerySchema>;
+export type GroupedQuery = z.infer<typeof GroupedQuerySchema>;
 
 /**
  * Every grouped row matching the query, with the caller's state applied,
  * filtered and sorted — before paging. Shared by the list, the id listing
  * (bulk actions over a whole folder) and the tab counts.
  */
-async function computeGroupedRows(
+export async function computeGroupedRows(
   c: Context<{ Bindings: CloudflareBindings; Variables: Variables }>,
   query: GroupedQuery,
+  opts: {
+    /** Skip the Gmail-style categories (two scans of raw_headers) when the
+     *  caller neither filters by nor shows them, like the stats counts. */
+    categories?: boolean;
+  } = {},
 ) {
+  const needCategories =
+    opts.categories !== false || !!query.category || !!query.withTabCounts;
   const db = c.get("db");
   const user = c.get("user");
   const {
@@ -326,6 +334,16 @@ async function computeGroupedRows(
   // Scope the drafts filter to the signed-in user. Empty id matches no
   // drafts, so the filter safely yields nothing if the user is somehow absent.
   const draftsUserId = user?.id ?? "";
+  // The email a draft hangs off: a reply (`reply:<emailId>`, which also
+  // stores reply_to_email_id) or a forward (`forward:<emailId>`, which does
+  // not). The new-message `compose` draft maps to nothing, so it never
+  // surfaces a row.
+  const draftTargetEmailId = sql`(CASE
+    WHEN d.context_key LIKE 'reply:%'
+      THEN COALESCE(d.reply_to_email_id, substr(d.context_key, 7))
+    WHEN d.context_key LIKE 'forward:%'
+      THEN substr(d.context_key, 9)
+  END)`;
   // Resolve effective direction. Each sort key has a "natural" default
   // (recency/unread/attachments → desc, inbox → asc) so the UI can
   // pass `direction: undefined` to mean "use the natural one for this
@@ -356,9 +374,8 @@ async function computeGroupedRows(
     personConditions.push(
       sql`s.id IN (
         SELECT e.person_id FROM emails e
-        JOIN ${drafts} d ON d.reply_to_email_id = e.id
+        JOIN ${drafts} d ON e.id = ${draftTargetEmailId}
         WHERE d.user_id = ${draftsUserId}
-          AND d.context_key LIKE 'reply:%'
           AND e.conversation_id IS NULL
       )`,
     );
@@ -492,9 +509,8 @@ async function computeGroupedRows(
     groupConditions.push(
       sql`g.conversation_id IN (
         SELECT e.conversation_id FROM emails e
-        JOIN ${drafts} d ON d.reply_to_email_id = e.id
+        JOIN ${drafts} d ON e.id = ${draftTargetEmailId}
         WHERE d.user_id = ${draftsUserId}
-          AND d.context_key LIKE 'reply:%'
           AND e.conversation_id IS NOT NULL
       )`,
     );
@@ -647,43 +663,45 @@ async function computeGroupedRows(
   }
   // Categories: one query per row kind for "has bulk-mail headers", then
   // sender heuristics in categorize().
-  const promoPeople = new Set(
-    (
-      await db.all<{ k: string }>(sql`
+  if (needCategories) {
+    const promoPeople = new Set(
+      (
+        await db.all<{ k: string }>(sql`
         SELECT DISTINCT person_id AS k FROM ${emails}
         WHERE conversation_id IS NULL AND lower(raw_headers) LIKE '%list-unsubscribe%'
       `)
-    ).map((r) => r.k),
-  );
-  const promoConvs = new Set(
-    (
-      await db.all<{ k: string }>(sql`
+      ).map((r) => r.k),
+    );
+    const promoConvs = new Set(
+      (
+        await db.all<{ k: string }>(sql`
         SELECT DISTINCT conversation_id AS k FROM ${emails}
         WHERE conversation_id IS NOT NULL AND lower(raw_headers) LIKE '%list-unsubscribe%'
       `)
-    ).map((r) => r.k),
-  );
-  for (const r of merged) {
-    r.category =
-      r.type === "person"
-        ? categorize([r.email], promoPeople.has(r.id), r.recipients)
-        : // Group senders are hydrated after paging; headers and the
-          // inbox decide.
-          categorize([], promoConvs.has(r.id), [r.inbox]);
-  }
-  // The caller's own "Move to <tab>" corrections win over the guess.
-  const overrides = await db
-    .select()
-    .from(categoryOverrides)
-    .where(eq(categoryOverrides.userId, user?.id ?? ""));
-  if (overrides.length > 0) {
-    const bySender = new Map(
-      overrides.map((o: any) => [o.senderEmail, o.category as MailCategory]),
+      ).map((r) => r.k),
     );
     for (const r of merged) {
-      if (r.type !== "person") continue;
-      const o = bySender.get(r.email.toLowerCase());
-      if (o) r.category = o;
+      r.category =
+        r.type === "person"
+          ? categorize([r.email], promoPeople.has(r.id), r.recipients)
+          : // Group senders are hydrated after paging; headers and the
+            // inbox decide.
+            categorize([], promoConvs.has(r.id), [r.inbox]);
+    }
+    // The caller's own "Move to <tab>" corrections win over the guess.
+    const overrides = await db
+      .select()
+      .from(categoryOverrides)
+      .where(eq(categoryOverrides.userId, user?.id ?? ""));
+    if (overrides.length > 0) {
+      const bySender = new Map(
+        overrides.map((o: any) => [o.senderEmail, o.category as MailCategory]),
+      );
+      for (const r of merged) {
+        if (r.type !== "person") continue;
+        const o = bySender.get(r.email.toLowerCase());
+        if (o) r.category = o;
+      }
     }
   }
 
