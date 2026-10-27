@@ -205,11 +205,18 @@ export function MailActionButtons({
   handlers,
   className,
   showStar = true,
+  compact = false,
 }: {
   state: MailStateLike;
   handlers: MailActionHandlers;
   className?: string;
   showStar?: boolean;
+  /**
+   * List-row hover bar: only the Gmail-style essentials (archive, trash,
+   * snooze); pin and star stay in the "⋯" menu and on the row itself, so
+   * the bar never covers the sender or subject.
+   */
+  compact?: boolean;
 }) {
   const archived = !!state.archivedAt;
   return (
@@ -272,7 +279,7 @@ export function MailActionButtons({
           </DropdownMenuContent>
         </DropdownMenu>
       )}
-      {handlers.onTogglePin && (
+      {!compact && handlers.onTogglePin && (
         <IconAction
           label={state.pinned ? "Unpin" : "Pin to top"}
           shortcut="P"
@@ -293,7 +300,7 @@ export function MailActionButtons({
           <Trash2 />
         </IconAction>
       )}
-      {showStar && handlers.onToggleStar && (
+      {showStar && !compact && handlers.onToggleStar && (
         <StarToggle starred={state.starred} onToggle={handlers.onToggleStar} />
       )}
     </div>

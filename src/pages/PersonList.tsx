@@ -462,10 +462,11 @@ export default function PersonList({
                     </button>
 
                     {hasMenu && (
-                      <div className="absolute right-2 top-1 flex items-center gap-0.5">
+                      <div className="absolute bottom-1.5 right-2 flex items-center gap-0.5">
                         {/* Desktop hover bar */}
                         <div className="hidden rounded-lg bg-card/95 shadow-card ring-1 ring-border [@media(hover:hover)]:group-hover:flex [@media(hover:hover)]:group-has-[:focus-visible]:flex">
                           <MailActionButtons
+                            compact
                             state={person}
                             handlers={handlers}
                           />

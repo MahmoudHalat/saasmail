@@ -26,7 +26,7 @@ test.describe.serial("compose & send", () => {
     await expect(page.getByText("Alice Anderson")).toBeVisible();
 
     // Click Compose button in sidebar
-    await page.getByRole("button", { name: "Compose" }).click();
+    await page.getByRole("button", { name: "Compose", exact: true }).click();
 
     // Wait for the compose dialog to open. The slim tray header now
     // reads "New message" (or "New message · <recipient>" once To is
@@ -162,7 +162,7 @@ test.describe.serial("compose & send", () => {
     await expect(page.getByText("Alice Anderson")).toBeVisible();
 
     // Open Compose
-    await page.getByRole("button", { name: "Compose" }).click();
+    await page.getByRole("button", { name: "Compose", exact: true }).click();
 
     const dialog = page.getByRole("dialog");
     await expect(dialog).toBeVisible();
