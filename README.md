@@ -94,6 +94,12 @@ https://github.com/user-attachments/assets/870186a2-840f-4b95-b859-4acd44863263
 
 ![Table overview](docs/screenshots/table-view.jpg)
 
+**Gmail- and Outlook-style layouts** — each user can switch to a familiar layout in Settings → Appearance: Gmail-style with category tabs and labels per inbox, or Outlook-style with Focused/Other, a ribbon and a reading pane.
+
+![Gmail-style layout](docs/screenshots/gmail-layout.jpg)
+
+![Outlook-style layout](docs/screenshots/outlook-layout.jpg)
+
 **Templates & sequences** — reusable `{{variable}}` email templates and multi-step drip campaigns you enroll contacts into.
 
 ![Email templates](docs/screenshots/templates.jpg)
