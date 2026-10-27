@@ -3,8 +3,11 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useMemo,
   useState,
 } from "react";
+import { useLayoutSettings } from "@/lib/preferences";
+import { DEFAULT_UNDO_SEND_SECONDS } from "@/lib/undo-send";
 import type { MailCategory, Stats } from "@/lib/api";
 
 /* ── Gmail-only view settings (this device) ────────────────────────── */
@@ -26,6 +29,9 @@ export interface ViewPrefs {
   inboxType: InboxType;
   swipeLeft: SwipeAction;
   swipeRight: SwipeAction;
+  /** Left nav collapsed to the icon rail (null = automatic by width). */
+  railCollapsed: boolean | null;
+  [key: string]: unknown;
 }
 
 export const DEFAULT_VIEW: ViewPrefs = {
@@ -35,55 +41,59 @@ export const DEFAULT_VIEW: ViewPrefs = {
   inboxType: "default",
   swipeLeft: "archive",
   swipeRight: "archive",
+  railCollapsed: null,
 };
 
 const SWIPES: SwipeAction[] = ["archive", "delete", "read", "snooze", "none"];
 
-function readView(): ViewPrefs {
-  try {
-    const raw = JSON.parse(window.localStorage.getItem(VIEW_KEY) ?? "{}");
-    return {
-      readingPane: ["right", "below"].includes(raw.readingPane)
-        ? raw.readingPane
-        : "none",
-      density: raw.density === "comfortable" ? "comfortable" : "default",
-      tabs: raw.tabs !== false,
-      inboxType: ["unread", "starred"].includes(raw.inboxType)
-        ? raw.inboxType
-        : "default",
-      swipeLeft: SWIPES.includes(raw.swipeLeft) ? raw.swipeLeft : "archive",
-      swipeRight: SWIPES.includes(raw.swipeRight) ? raw.swipeRight : "archive",
-    };
-  } catch {
-    return DEFAULT_VIEW;
-  }
+/** Guard against odd values saved by older builds. */
+function sanitizeView(raw: Partial<ViewPrefs>): ViewPrefs {
+  return {
+    readingPane: ["right", "below"].includes(raw.readingPane as string)
+      ? (raw.readingPane as ReadingPane)
+      : "none",
+    density: raw.density === "comfortable" ? "comfortable" : "default",
+    tabs: raw.tabs !== false,
+    inboxType: ["unread", "starred"].includes(raw.inboxType as string)
+      ? (raw.inboxType as InboxType)
+      : "default",
+    swipeLeft: SWIPES.includes(raw.swipeLeft as SwipeAction)
+      ? (raw.swipeLeft as SwipeAction)
+      : "archive",
+    swipeRight: SWIPES.includes(raw.swipeRight as SwipeAction)
+      ? (raw.swipeRight as SwipeAction)
+      : "archive",
+    railCollapsed:
+      typeof raw.railCollapsed === "boolean" ? raw.railCollapsed : null,
+  };
 }
 
-const VIEW_EVENT = "saasmail:gmail-view";
-
-/** Device-local Gmail view settings, shared across components via an event. */
+/**
+ * Gmail view settings, saved to the account (they follow the user across
+ * devices). Values from the old device-only key migrate on first load.
+ */
 export function useGmailView() {
-  const [view, setView] = useState<ViewPrefs>(readView);
-  useEffect(() => {
-    const on = () => setView(readView());
-    window.addEventListener(VIEW_EVENT, on);
-    window.addEventListener("storage", on);
-    return () => {
-      window.removeEventListener(VIEW_EVENT, on);
-      window.removeEventListener("storage", on);
-    };
-  }, []);
-  const update = useCallback((patch: Partial<ViewPrefs>) => {
-    const next = { ...readView(), ...patch };
-    try {
-      window.localStorage.setItem(VIEW_KEY, JSON.stringify(next));
-    } catch {
-      /* storage off: still applies for this session via the event */
-    }
-    window.dispatchEvent(new Event(VIEW_EVENT));
-    setView(next);
-  }, []);
+  const [raw, setRaw] = useLayoutSettings<ViewPrefs>(
+    "gmail",
+    DEFAULT_VIEW,
+    VIEW_KEY,
+  );
+  const view = useMemo(() => sanitizeView(raw), [raw]);
+  const update = useCallback(
+    (patch: Partial<ViewPrefs>) => setRaw(patch),
+    [setRaw],
+  );
   return { ...view, update };
+}
+
+const COMMON_DEFAULTS = { undoSendSeconds: DEFAULT_UNDO_SEND_SECONDS };
+
+/** Settings shared by every layout (Undo Send delay). */
+export function useCommonSettings() {
+  return useLayoutSettings<{ undoSendSeconds: number }>(
+    "common",
+    COMMON_DEFAULTS,
+  );
 }
 
 /* ── Recent searches ───────────────────────────────────────────────── */
@@ -153,6 +163,8 @@ export interface NavCounts {
   outbox: number;
   /** Unread conversations per inbox tab. */
   categories: Partial<Record<MailCategory, number>>;
+  /** Unread conversations that arrived since the tab was last opened. */
+  categoriesNew: Partial<Record<MailCategory, number>>;
 }
 
 export interface GmailShellApi {
@@ -181,6 +193,7 @@ export const EMPTY_COUNTS: NavCounts = {
   drafts: 0,
   outbox: 0,
   categories: {},
+  categoriesNew: {},
 };
 
 export const GmailShellContext = createContext<GmailShellApi | null>(null);

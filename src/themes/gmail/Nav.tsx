@@ -45,6 +45,7 @@ const FOLDER_ICONS: Record<
   drafts: (p) => <StickyNote {...p} />,
   sequenced: (p) => <ListTodo {...p} />,
   archive: (p) => <Archive {...p} />,
+  trash: (p) => <Trash2 {...p} />,
 };
 
 export const CATEGORY_ICONS: Record<
@@ -65,6 +66,7 @@ const FOLDER_ORDER: Array<Exclude<GmailFolder, "all">> = [
   "drafts",
   "sequenced",
   "archive",
+  "trash",
 ];
 
 const DROPPABLE: Partial<Record<GmailFolder, DropTarget>> = {
@@ -72,6 +74,7 @@ const DROPPABLE: Partial<Record<GmailFolder, DropTarget>> = {
   starred: "starred",
   snoozed: "snoozed",
   archive: "archive",
+  trash: "trash",
 };
 
 export interface LabelEntry {
@@ -291,15 +294,6 @@ export function GmailNavList({
         count={counts.outbox}
         onClick={() => go("/outbox")}
       />
-      {dragging > 0 && (
-        <NavRow
-          icon={<Trash2 size={20} />}
-          label="Trash (delete forever)"
-          onClick={() => {}}
-          drop="trash"
-          testId="gmail-nav-trash"
-        />
-      )}
 
       {labels.length > 0 && (
         <>

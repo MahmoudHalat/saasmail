@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   deletePerson,
+  fetchGroupedIds,
   fetchGroupedPeople,
   fetchStats,
   markConversationsRead,
@@ -10,9 +11,11 @@ import {
   type InboxSort,
   type MailCategory,
   type MailFolder,
+  type MailItemRef,
   type Stats,
 } from "@/lib/api";
 import { itemKey, itemRef } from "@/hooks/useMailList";
+import { applyToFolder, markFolderRead } from "@/lib/folder-actions";
 import { useRealtimeUpdates } from "@/hooks/useRealtimeUpdates";
 import { onInboxRefresh } from "@/lib/inbox-events";
 import { showToast } from "@/lib/toast";
@@ -34,6 +37,10 @@ export interface GmailListQuery {
   hasAttachment?: boolean;
   from?: string;
   category?: MailCategory;
+  starred?: boolean;
+  after?: number;
+  before?: number;
+  subject?: string;
   sort?: InboxSort;
 }
 
@@ -44,6 +51,7 @@ type StatePatch = {
   pinned?: boolean;
   archived?: boolean;
   snoozedUntil?: number | null;
+  trashed?: boolean;
 };
 
 function plural(n: number, one: string, many = `${one}s`) {
@@ -71,6 +79,10 @@ export function useGmailList(query: GmailListQuery) {
     hasAttachment,
     from,
     category,
+    starred,
+    after,
+    before,
+    subject,
     sort,
   } = query;
   const key = JSON.stringify([
@@ -83,6 +95,10 @@ export function useGmailList(query: GmailListQuery) {
     hasAttachment,
     from,
     category,
+    starred,
+    after,
+    before,
+    subject,
     sort,
   ]);
 
@@ -97,6 +113,10 @@ export function useGmailList(query: GmailListQuery) {
       hasAttachment,
       from: from || undefined,
       category,
+      starred,
+      after,
+      before,
+      subject: subject || undefined,
       sort,
     }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -155,19 +175,18 @@ export function useGmailList(query: GmailListQuery) {
   useEffect(() => onInboxRefresh(refresh), [refresh]);
 
   /** Every row matching the current filters (for "Select all N"). */
-  const fetchAll = useCallback(async (): Promise<GroupedItem[]> => {
-    const out: GroupedItem[] = [];
-    for (let p = 1; p <= 50; p++) {
-      const res = await fetchGroupedPeople({
-        ...params(),
-        page: p,
-        limit: 100,
-      });
-      out.push(...res.data);
-      if (out.length >= res.total || res.data.length === 0) break;
-    }
-    return out;
+  const fetchAll = useCallback(async (): Promise<MailItemRef[]> => {
+    const res = await fetchGroupedIds(params());
+    return res.data.map(({ type, id }) => ({ type, id }));
   }, [params]);
+
+  /** The current filters, for whole-folder server actions. */
+  const folderParams = params;
+
+  const refreshAll = () => {
+    void load({ silent: true });
+    loadStats();
+  };
 
   const inFolderAfter = (patch: StatePatch): boolean => {
     if (folder === "inbox")
@@ -202,6 +221,11 @@ export function useGmailList(query: GmailListQuery) {
                 }),
                 ...(patch.snoozedUntil !== undefined && {
                   snoozedUntil: patch.snoozedUntil,
+                }),
+                ...(patch.trashed !== undefined && {
+                  trashedAt: patch.trashed
+                    ? Math.floor(Date.now() / 1000)
+                    : null,
                 }),
               }
             : it,
@@ -320,6 +344,90 @@ export function useGmailList(query: GmailListQuery) {
           })}`,
         },
       ),
+    trash: (targets: GroupedItem[]) =>
+      applyState(
+        targets,
+        { trashed: true },
+        {
+          removeFromView: folder !== "all",
+          message:
+            targets.length === 1
+              ? "Conversation moved to Trash"
+              : `${targets.length} conversations moved to Trash`,
+          undo: { trashed: false },
+        },
+      ),
+    restore: (targets: GroupedItem[]) =>
+      applyState(
+        targets,
+        { trashed: false },
+        {
+          removeFromView: folder === "trash",
+          message:
+            targets.length === 1
+              ? "Conversation restored"
+              : `${targets.length} conversations restored`,
+          undo: { trashed: true },
+        },
+      ),
+    /** Mark every unread row matching the filters read (whole folder). */
+    markAllRead: async () => {
+      try {
+        const n = await markFolderRead(params());
+        setItems((prev) => prev.map((it) => ({ ...it, unreadCount: 0 })));
+        showToast({
+          kind: "info",
+          message:
+            n === 0
+              ? "Nothing to mark as read"
+              : `${n} conversation${n === 1 ? "" : "s"} marked as read`,
+        });
+        refreshAll();
+      } catch (e) {
+        showToast({
+          kind: "error",
+          message: e instanceof Error ? e.message : "Could not mark read",
+        });
+      }
+    },
+    /** Apply a state patch to every row matching the filters. */
+    applyToAll: async (
+      patch: StatePatch,
+      message: string,
+      undo?: StatePatch,
+    ) => {
+      try {
+        const refs = await applyToFolder(params(), patch);
+        const undoFn = undo
+          ? () => {
+              undoRef.current = null;
+              void Promise.all(
+                chunk(refs).map((c) => updateMailState(c, undo)),
+              ).then(() => load({ silent: true }));
+            }
+          : null;
+        undoRef.current = undoFn;
+        showToast({
+          kind: "info",
+          message: message.replace("{n}", String(refs.length)),
+          action: undoFn
+            ? {
+                label: "Undo",
+                onClick: (dismiss) => {
+                  dismiss();
+                  undoFn();
+                },
+              }
+            : undefined,
+        });
+        refreshAll();
+      } catch (e) {
+        showToast({
+          kind: "error",
+          message: e instanceof Error ? e.message : "Could not update mail",
+        });
+      }
+    },
     unsnooze: (targets: GroupedItem[]) =>
       applyState(
         targets,
@@ -414,6 +522,7 @@ export function useGmailList(query: GmailListQuery) {
     lastLoaded,
     actions,
     fetchAll,
+    folderParams,
     undoLast,
     /** Record a custom undo for `z` (e.g. mark unread). */
     setUndo: (fn: (() => void) | null) => {
@@ -423,3 +532,9 @@ export function useGmailList(query: GmailListQuery) {
 }
 
 export type GmailList = ReturnType<typeof useGmailList>;
+
+function chunk<T>(xs: T[], n = 100): T[][] {
+  const out: T[][] = [];
+  for (let i = 0; i < xs.length; i += n) out.push(xs.slice(i, i + n));
+  return out;
+}

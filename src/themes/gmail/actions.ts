@@ -1,14 +1,19 @@
-import type { GroupedItem } from "@/lib/api";
+import type { GroupedItem, MailCategory } from "@/lib/api";
 
 /** Row-level mail actions the list, rows, menus and conversation share. */
 export interface RowActions {
   archive: (items: GroupedItem[]) => void;
-  /** Gmail's Mute: here, archive (new mail still un-archives). */
-  mute: (items: GroupedItem[]) => void;
   /** Back to the inbox: un-archive and/or un-snooze. */
   moveToInbox: (items: GroupedItem[]) => void;
-  /** Asks for confirmation, then deletes for good. */
+  /**
+   * Delete: moves to Trash (with Undo). Inside Trash it asks, then
+   * deletes forever.
+   */
   requestDelete: (items: GroupedItem[], after?: () => void) => void;
+  /** Out of Trash, back where it was. */
+  restore: (items: GroupedItem[]) => void;
+  /** Always put mail from these senders in this inbox tab. */
+  moveToCategory: (items: GroupedItem[], category: MailCategory) => void;
   markRead: (items: GroupedItem[]) => void;
   markUnread: (items: GroupedItem[]) => Promise<void>;
   snooze: (items: GroupedItem[], until: number) => void;
@@ -38,7 +43,17 @@ export interface ConversationHandle {
 }
 
 export function inInboxView(item: GroupedItem) {
-  return !item.archivedAt && !item.snoozedUntil;
+  return !item.archivedAt && !item.snoozedUntil && !item.trashedAt;
+}
+
+/** Sender addresses for a category override. */
+export function senderAddresses(items: GroupedItem[]): string[] {
+  const out = new Set<string>();
+  for (const it of items) {
+    if (it.type === "person") out.add(it.email.toLowerCase());
+    else for (const p of it.participants) out.add(p.email.toLowerCase());
+  }
+  return [...out];
 }
 
 export function senderEmail(item: GroupedItem): string {

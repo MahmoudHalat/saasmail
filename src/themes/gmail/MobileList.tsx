@@ -7,6 +7,7 @@ import {
 } from "react";
 import {
   Archive,
+  ArchiveRestore,
   ArrowLeft,
   EllipsisVertical,
   Inbox as InboxIcon,
@@ -143,7 +144,7 @@ function MobileRow({
     const dir = mx > 0 ? 1 : -1;
     const a = actionFor(dir);
     if (a !== "none" && Math.abs(mx) > width * SWIPE_FRACTION) {
-      if (a === "archive") {
+      if (a === "archive" || (a === "delete" && !item.trashedAt)) {
         setLeaving(dir);
         setDx(dir * width);
         window.setTimeout(() => runSwipe(a), 180);
@@ -451,7 +452,8 @@ export function MobileSelectionBar({
     selected.some((s) => !inInboxView(s));
   const allStarred = selected.every((s) => s.starred);
   const allPinned = selected.every((s) => s.pinned);
-  const canDelete = selected.some((s) => s.type === "person");
+  const inTrash = folder === "trash" || selected.some((s) => !!s.trashedAt);
+  const canDelete = !inTrash || selected.some((s) => s.type === "person");
   const done = (fn: () => void) => () => {
     fn();
     onClear();
@@ -471,7 +473,17 @@ export function MobileSelectionBar({
         <X size={24} />
       </button>
       <span className="flex-1 text-[20px] font-medium">{selected.length}</span>
-      {anyOut ? (
+      {inTrash ? (
+        <button
+          type="button"
+          className="gm-icon-btn"
+          style={{ width: 48, height: 48 }}
+          aria-label="Restore"
+          onClick={done(() => act.restore(selected))}
+        >
+          <ArchiveRestore size={22} />
+        </button>
+      ) : anyOut ? (
         <button
           type="button"
           className="gm-icon-btn"
@@ -496,7 +508,7 @@ export function MobileSelectionBar({
         type="button"
         className="gm-icon-btn"
         style={{ width: 48, height: 48 }}
-        aria-label="Delete"
+        aria-label={inTrash ? "Delete forever" : "Delete"}
         disabled={!canDelete}
         onClick={() => act.requestDelete(selected, onClear)}
       >

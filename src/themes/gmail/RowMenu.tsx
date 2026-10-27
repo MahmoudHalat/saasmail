@@ -1,7 +1,7 @@
 import * as Menu from "@radix-ui/react-dropdown-menu";
 import {
   Archive,
-  BellOff,
+  ArchiveRestore,
   CalendarClock,
   ChevronRight,
   Clock,
@@ -16,7 +16,7 @@ import {
   ReplyAll,
   Search,
   Star,
-  Tag,
+  Tags,
   Trash2,
 } from "lucide-react";
 import type { ReactNode } from "react";
@@ -24,8 +24,7 @@ import type { GroupedItem } from "@/lib/api";
 import { snoozePresets } from "@/hooks/useMailList";
 import { itemTitle } from "@/hooks/useMailList";
 import { inInboxView, type RowActions } from "./actions";
-import { LabelDot } from "./ui";
-import { labelName } from "./lib";
+import { CATEGORIES, CATEGORY_LABELS } from "./lib";
 
 export interface RowMenuState {
   x: number;
@@ -114,7 +113,8 @@ export function RowMenu({
   const allStarred = items.length > 0 && items.every((i) => i.starred);
   const allPinned = items.length > 0 && items.every((i) => i.pinned);
   const outOfInbox = items.some((i) => !inInboxView(i));
-  const canDelete = items.some((i) => i.type === "person");
+  const anyTrashed = items.some((i) => !!i.trashedAt);
+  const canDelete = !anyTrashed || items.some((i) => i.type === "person");
   const run = (fn: () => void) => () => {
     onClose();
     fn();
@@ -178,7 +178,14 @@ export function RowMenu({
             Forward
           </Item>
           {sep}
-          {outOfInbox ? (
+          {anyTrashed ? (
+            <Item
+              icon={<ArchiveRestore size={18} />}
+              onSelect={run(() => act.restore(items))}
+            >
+              Restore from Trash
+            </Item>
+          ) : outOfInbox ? (
             <Item
               icon={<InboxIcon size={18} />}
               onSelect={run(() => act.moveToInbox(items))}
@@ -198,9 +205,9 @@ export function RowMenu({
             icon={<Trash2 size={18} />}
             onSelect={run(() => act.requestDelete(items))}
             disabled={!canDelete}
-            hint="#"
+            hint={anyTrashed ? undefined : "#"}
           >
-            Delete
+            {anyTrashed ? "Delete forever" : "Delete"}
           </Item>
           {anyUnread ? (
             <Item
@@ -264,13 +271,6 @@ export function RowMenu({
           >
             {allPinned ? "Unpin" : "Pin to top"}
           </Item>
-          <Item
-            icon={<BellOff size={18} />}
-            onSelect={run(() => act.mute(items))}
-            hint="m"
-          >
-            Mute
-          </Item>
           <Sub icon={<FolderInput size={18} />} label="Move to">
             <Menu.Item
               className="gm-menu-item"
@@ -297,23 +297,23 @@ export function RowMenu({
               <Star size={18} /> Starred
             </Menu.Item>
           </Sub>
-          <Sub
-            icon={<Tag size={18} />}
-            label="Label as"
-            disabled={!labels.length}
-          >
+          <Sub icon={<Tags size={18} />} label="Move to tab">
             <Menu.Label className="max-w-[260px] px-4 pb-2 pt-1 text-xs text-text-secondary">
-              Labels are the inboxes mail arrived at. Pick one to see all of its
-              mail.
+              Future mail from {one ? "this sender" : "these senders"} goes to
+              the tab you pick.
             </Menu.Label>
-            {labels.map((l) => (
+            {CATEGORIES.map((c) => (
               <Menu.Item
-                key={l.address}
+                key={c}
                 className="gm-menu-item"
-                onSelect={run(() => act.showLabel(l.address))}
+                onSelect={run(() => act.moveToCategory(items, c))}
               >
-                <LabelDot address={l.address} />
-                {labelName(l.address, l.displayName)}
+                {CATEGORY_LABELS[c]}
+                {one?.category === c && (
+                  <span className="ml-auto text-xs text-text-secondary">
+                    current
+                  </span>
+                )}
               </Menu.Item>
             ))}
           </Sub>

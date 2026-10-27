@@ -10,12 +10,18 @@ import {
 } from "lucide-react";
 import TiptapEditor from "@/components/TiptapEditor";
 import CcInput from "@/components/CcInput";
-import { replyToEmail, sendEmail, type CcEntry, type Email } from "@/lib/api";
+import {
+  deleteDraft,
+  replyToEmail,
+  saveDraft,
+  sendEmail,
+  type CcEntry,
+  type Email,
+} from "@/lib/api";
 import { dispatchEmailSent } from "@/lib/email-events";
-import { serverErrorMessage } from "@/lib/error-message";
 import { sanitizeEmailHtml } from "@/lib/sanitize-html";
-import { showToast } from "@/lib/toast";
 import { useDraftAutosave } from "@/lib/use-draft-autosave";
+import { sendWithUndo } from "@/lib/undo-send";
 import { cn } from "@/lib/utils";
 import { Avatar } from "./ui";
 
@@ -49,7 +55,13 @@ export function InlineComposer({
   onClose,
   onSent,
   onPopOut,
+  onReopen,
+  undoSeconds,
 }: {
+  /** Reopen this box (after Undo, or if the send failed). */
+  onReopen: () => void;
+  /** Undo Send delay (account setting). */
+  undoSeconds: number;
   mode: InlineMode;
   target: Email;
   /** Who a reply goes to. */
@@ -91,7 +103,7 @@ export function InlineComposer({
   const [showCc, setShowCc] = useState(mode === "replyAll" && cc.length > 0);
   const [bodyHtml, setBodyHtml] = useState(isForward ? forwardHtml : "");
   const [bodyText, setBodyText] = useState("");
-  const [sending, setSending] = useState(false);
+  const sending = false;
   const [error, setError] = useState("");
   const wrapRef = useRef<HTMLDivElement>(null);
 
@@ -118,7 +130,7 @@ export function InlineComposer({
     contextKey: isForward ? `forward:${target.id}` : `reply:${target.id}`,
     enabled: true,
     isEmpty: isForward ? bodyHtml === forwardHtml || empty : empty,
-    restore: !isForward,
+    restore: true,
     values: isForward
       ? { fromAddress, to, cc, subject: `Fwd: ${subject}`, bodyHtml, bodyText }
       : { fromAddress, cc, bodyHtml, bodyText, replyToEmailId: target.id },
@@ -130,6 +142,7 @@ export function InlineComposer({
         setShowCc(true);
       }
       if (d.fromAddress) setFromAddress(d.fromAddress);
+      if (d.toAddress) setTo(d.toAddress);
     },
   });
 
@@ -138,61 +151,82 @@ export function InlineComposer({
     return id?.signatureHtml ? sanitizeEmailHtml(id.signatureHtml) : null;
   }, [identities, fromAddress]);
 
-  const send = async () => {
+  const contextKey = isForward ? `forward:${target.id}` : `reply:${target.id}`;
+
+  const send = () => {
     if (sending) return;
     setError("");
     const finalBody = signature
       ? `${bodyHtml}<div data-signature>${signature}</div>`
       : bodyHtml;
-    try {
-      if (isForward) {
-        const recipients = to
-          .split(/[,;\s]+/)
-          .map((x) => x.trim())
-          .filter(Boolean);
-        if (!recipients.length || !recipients.every((r) => EMAIL_RE.test(r))) {
-          setError("Add a valid recipient");
-          return;
-        }
-        setSending(true);
-        for (const r of recipients) {
-          await sendEmail({
-            to: r,
-            fromAddress,
-            cc: cc.length ? cc : undefined,
-            subject: `Fwd: ${subject}`,
+    const recipients = to
+      .split(/[,;\s]+/)
+      .map((x) => x.trim())
+      .filter(Boolean);
+    if (isForward) {
+      if (!recipients.length || !recipients.every((r) => EMAIL_RE.test(r))) {
+        setError("Add a valid recipient");
+        return;
+      }
+    } else if (empty) {
+      setError("Write a reply first");
+      return;
+    }
+    // Keep the draft until the real send succeeds, so Undo (or a failed
+    // send) reopens the box with everything in it.
+    const kept = saveDraft({
+      contextKey,
+      fromAddress,
+      cc,
+      bodyHtml,
+      bodyText,
+      ...(isForward
+        ? { to, subject: `Fwd: ${subject}` }
+        : { replyToEmailId: target.id }),
+    }).catch(() => null);
+    const payloadCc = cc.length ? cc : undefined;
+    const text = bodyText.trim() ? { bodyText } : {};
+    onClose();
+    sendWithUndo({
+      seconds: undoSeconds,
+      label: isForward ? "Forwarding…" : "Sending…",
+      send: async () => {
+        if (isForward) {
+          for (const r of recipients) {
+            await sendEmail({
+              to: r,
+              fromAddress,
+              cc: payloadCc,
+              subject: `Fwd: ${subject}`,
+              bodyHtml: finalBody,
+              ...text,
+            });
+          }
+        } else {
+          await replyToEmail(target.id, {
             bodyHtml: finalBody,
-            ...(bodyText.trim() ? { bodyText } : {}),
+            ...text,
+            fromAddress,
+            ...(payloadCc ? { cc: payloadCc } : {}),
           });
         }
+      },
+      onUndo: () => {
+        void kept.then(() => onReopen());
+      },
+      onSent: () => {
+        void kept.then(() => deleteDraft(contextKey).catch(() => {}));
         dispatchEmailSent({
           fromAddress,
-          to: recipients[0],
-          origin: "compose",
+          to: isForward ? recipients[0] : party.email,
+          origin: isForward ? "compose" : "reply",
         });
-      } else {
-        if (empty) {
-          setError("Write a reply first");
-          return;
-        }
-        setSending(true);
-        await replyToEmail(target.id, {
-          bodyHtml: finalBody,
-          ...(bodyText.trim() ? { bodyText } : {}),
-          fromAddress,
-          ...(cc.length ? { cc } : {}),
-        });
-        dispatchEmailSent({ fromAddress, to: party.email, origin: "reply" });
-      }
-      clear();
-      showToast({ kind: "success", message: "Message sent" });
-      onSent();
-      onClose();
-    } catch (e) {
-      setError(serverErrorMessage(e) ?? "Could not send");
-    } finally {
-      setSending(false);
-    }
+        onSent();
+      },
+      onError: () => {
+        void kept.then(() => onReopen());
+      },
+    });
   };
 
   const ModeIcon =
@@ -206,7 +240,7 @@ export function InlineComposer({
       onKeyDown={(e) => {
         if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
           e.preventDefault();
-          void send();
+          send();
         }
         if (e.key === "Escape") {
           e.stopPropagation();
@@ -331,7 +365,7 @@ export function InlineComposer({
         <div className="flex items-center gap-2 px-3 pb-3 pt-1">
           <button
             type="button"
-            onClick={() => void send()}
+            onClick={send}
             disabled={sending}
             className={cn(
               "inline-flex h-9 items-center gap-2 rounded-full bg-accent px-5 text-sm font-medium text-accent-foreground hover:bg-accent-hover disabled:opacity-60",
@@ -339,7 +373,7 @@ export function InlineComposer({
             title="Send (Ctrl+Enter)"
             data-testid="gmail-inline-send"
           >
-            {sending ? "Sending…" : "Send"}
+            Send
             <Send size={16} />
           </button>
           <div className="flex-1" />

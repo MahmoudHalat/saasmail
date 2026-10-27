@@ -459,7 +459,9 @@ export default function GmailShell({ children, onCompose }: ThemeShellProps) {
 
   const [stats, setStats] = useState<Stats | null>(null);
   const [inboxMounted, setInboxMounted] = useState(false);
-  const [railPref, setRailPref] = useState<boolean | null>(readRail);
+  const view = useGmailView();
+  // Saved to the account; the old device-only key is the fallback.
+  const railPref = view.railCollapsed ?? readRail();
   const rail = railPref ?? !isWide;
   const [railHover, setRailHover] = useState(false);
   const [drawer, setDrawer] = useState(false);
@@ -468,7 +470,6 @@ export default function GmailShell({ children, onCompose }: ThemeShellProps) {
   const [shortcuts, setShortcuts] = useState(false);
   const searchRef = useRef<HTMLInputElement>(null);
   const hoverTimer = useRef<number | undefined>(undefined);
-  const view = useGmailView();
   const [counts, setCounts] = useState<NavCounts>(EMPTY_COUNTS);
 
   // Nav counts the way Gmail shows them: unread conversations in the
@@ -477,27 +478,36 @@ export default function GmailShell({ children, onCompose }: ThemeShellProps) {
   const countsReq = useRef(0);
   const loadCounts = useCallback(() => {
     const id = ++countsReq.current;
-    const unreadIn = (category?: MailCategory) =>
-      fetchGroupedPeople({ folder: "inbox", unread: true, category, limit: 1 })
-        .then((r) => r.total)
-        .catch(() => 0);
-    const cats: MailCategory[] = ["promotions", "social", "updates"];
     Promise.all([
-      unreadIn(view.tabs ? "primary" : undefined),
+      // One request: inbox tab counts (unread + new since last viewed).
+      fetchGroupedPeople({ folder: "inbox", limit: 1, withTabCounts: true })
+        .then((r) => r.tabCounts ?? null)
+        .catch(() => null),
       fetchGroupedPeople({ drafts: true, limit: 1 })
         .then((r) => r.total)
         .catch(() => 0),
       fetchOutboxCount()
         .then((r) => r.pending)
         .catch(() => 0),
-      ...cats.map((c) => unreadIn(c)),
-    ]).then(([inboxUnread, drafts, outbox, promotions, social, updates]) => {
+    ]).then(([tabs, drafts, outbox]) => {
       if (id !== countsReq.current) return;
+      const cats: MailCategory[] = [
+        "primary",
+        "promotions",
+        "social",
+        "updates",
+      ];
+      const unread = (c: MailCategory) => tabs?.[c]?.unread ?? 0;
       setCounts({
-        inboxUnread,
+        inboxUnread: view.tabs
+          ? unread("primary")
+          : cats.reduce((n, c) => n + unread(c), 0),
         drafts,
         outbox,
-        categories: { promotions, social, updates },
+        categories: Object.fromEntries(cats.map((c) => [c, unread(c)])),
+        categoriesNew: Object.fromEntries(
+          cats.map((c) => [c, tabs?.[c]?.new ?? 0]),
+        ),
       });
     });
   }, [view.tabs]);
@@ -528,13 +538,8 @@ export default function GmailShell({ children, onCompose }: ThemeShellProps) {
 
   const toggleRail = () => {
     const next = !rail;
-    setRailPref(next);
+    view.update({ railCollapsed: next });
     setRailHover(false);
-    try {
-      window.localStorage.setItem(RAIL_KEY, next ? "1" : "0");
-    } catch {
-      /* ignore */
-    }
   };
 
   const api = useMemo<GmailShellApi>(

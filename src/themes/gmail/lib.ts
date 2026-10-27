@@ -78,6 +78,7 @@ export type GmailFolder =
   | "drafts"
   | "sequenced"
   | "archive"
+  | "trash"
   | "all";
 
 export const GMAIL_FOLDERS: GmailFolder[] = [
@@ -88,6 +89,7 @@ export const GMAIL_FOLDERS: GmailFolder[] = [
   "drafts",
   "sequenced",
   "archive",
+  "trash",
   "all",
 ];
 
@@ -125,9 +127,12 @@ export interface ListState {
   /** Free-text search words. */
   q: string;
   unread: boolean;
-  /** `is:read` — rows with nothing unread. */
-  read: boolean;
   attachment: boolean;
+  /** `subject:` words. */
+  subject: string;
+  /** `after:` / `before:` dates, "YYYY-MM-DD" (local days). */
+  after: string;
+  before: string;
   /** Sender filter. */
   from: string;
   /** Inbox tab (only applies to the inbox folder). */
@@ -142,8 +147,10 @@ const EMPTY: ListState = {
   label: null,
   q: "",
   unread: false,
-  read: false,
   attachment: false,
+  subject: "",
+  after: "",
+  before: "",
   from: "",
   tab: null,
   category: null,
@@ -156,8 +163,10 @@ export function isSearch(s: ListState): boolean {
     s.q ||
     s.from ||
     s.unread ||
-    s.read ||
     s.attachment ||
+    s.subject ||
+    s.after ||
+    s.before ||
     s.within ||
     s.category
   );
@@ -175,7 +184,9 @@ export function parseListState(params: URLSearchParams): ListState {
     q: params.get("q") ?? "",
     from: params.get("from") ?? "",
     unread: params.get("unread") === "1",
-    read: params.get("read") === "1",
+    subject: params.get("subject") ?? "",
+    after: validDay(params.get("after")),
+    before: validDay(params.get("before")),
     attachment: params.get("has") === "attachment",
     tab: tab && CATEGORIES.includes(tab) ? tab : null,
     category: category && CATEGORIES.includes(category) ? category : null,
@@ -201,7 +212,9 @@ export function buildListSearch(input: Partial<ListState>): string {
   if (s.q) p.set("q", s.q);
   if (s.from) p.set("from", s.from);
   if (s.unread) p.set("unread", "1");
-  if (s.read) p.set("read", "1");
+  if (s.subject) p.set("subject", s.subject);
+  if (s.after) p.set("after", s.after);
+  if (s.before) p.set("before", s.before);
   if (s.attachment) p.set("has", "attachment");
   if (s.category) p.set("category", s.category);
   if (s.within) p.set("within", s.within);
@@ -218,7 +231,14 @@ export function folderQuery(
   drafts?: boolean;
   sequenced?: boolean;
   category?: MailCategory;
+  after?: number;
+  before?: number;
 } {
+  const d = dateQuery(s);
+  const dates = {
+    ...(d.after !== null && { after: d.after }),
+    ...(d.before !== null && { before: d.before }),
+  };
   const category =
     s.category ??
     (s.folder === "inbox" && tabsOn && !s.label && !isSearch(s)
@@ -226,12 +246,51 @@ export function folderQuery(
       : undefined);
   switch (s.folder) {
     case "drafts":
-      return { folder: "all", drafts: true, category };
+      return { folder: "all", drafts: true, category, ...dates };
     case "sequenced":
-      return { folder: "all", sequenced: true, category };
+      return { folder: "all", sequenced: true, category, ...dates };
     default:
-      return { folder: s.folder, category };
+      return { folder: s.folder, category, ...dates };
   }
+}
+
+/** "YYYY-MM-DD" or "" — accepts YYYY/MM/DD and YYYY-M-D too. */
+export function validDay(v: string | null | undefined): string {
+  const m = /^(\d{4})[-/](\d{1,2})[-/](\d{1,2})$/.exec((v ?? "").trim());
+  if (!m) return "";
+  const d = new Date(+m[1], +m[2] - 1, +m[3]);
+  if (Number.isNaN(d.getTime()) || d.getMonth() !== +m[2] - 1) return "";
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
+/** Unix seconds at local midnight starting a "YYYY-MM-DD" day. */
+export function dayStart(day: string): number {
+  const [y, m, d] = day.split("-").map(Number);
+  return Math.floor(new Date(y, m - 1, d).getTime() / 1000);
+}
+
+/**
+ * The server date window for a list state: the "Any time" chip and
+ * newer_than/older_than, intersected with after:/before: dates.
+ * Gmail's after: is inclusive, before: exclusive (both local days).
+ */
+export function dateQuery(
+  s: Pick<ListState, "within" | "after" | "before">,
+  now: Date = new Date(),
+): { after: number | null; before: number | null } {
+  const w = withinRange(s.within, now);
+  let after = w.after;
+  let before = w.before;
+  if (s.after) {
+    const a = dayStart(s.after);
+    after = after === null ? a : Math.max(after, a);
+  }
+  if (s.before) {
+    const b = dayStart(s.before);
+    before = before === null ? b : Math.min(before, b);
+  }
+  return { after, before };
 }
 
 /** Seconds window for a `within` value: [after, before] (either may be null). */
@@ -267,6 +326,7 @@ export const FOLDER_LABELS: Record<GmailFolder, string> = {
   drafts: "Drafts",
   sequenced: "Sequenced",
   archive: "Archive",
+  trash: "Trash",
   all: "All mail",
 };
 
@@ -296,6 +356,8 @@ const IN_FOLDERS: Record<string, GmailFolder> = {
   all: "all",
   snoozed: "snoozed",
   starred: "starred",
+  trash: "trash",
+  bin: "trash",
 };
 
 const OLDER_NEWER: Record<string, Within> = {
@@ -336,7 +398,6 @@ export function parseSearchQuery(
           continue;
         case "is":
           if (v === "unread") s.unread = true;
-          else if (v === "read") s.read = true;
           else if (v === "starred") {
             s.folder = "starred";
             explicitFolder = true;
@@ -355,6 +416,7 @@ export function parseSearchQuery(
             explicitFolder = true;
           } else words.push(m[0]);
           continue;
+        case "to":
         case "label": {
           const hit = labels.find(
             (l) =>
@@ -370,11 +432,32 @@ export function parseSearchQuery(
             s.category = v as MailCategory;
           else words.push(m[0]);
           continue;
+        case "subject":
+          s.subject = value;
+          continue;
+        case "after":
+        case "newer": {
+          const d = validDay(value);
+          if (d) s.after = d;
+          else words.push(m[0]);
+          continue;
+        }
+        case "before":
+        case "older": {
+          const d = validDay(value);
+          if (d) s.before = d;
+          else words.push(m[0]);
+          continue;
+        }
         case "newer_than":
           if (OLDER_NEWER[v]) s.within = OLDER_NEWER[v];
+          else if (relativeDay(v, 1)) s.after = relativeDay(v, 1);
+          else words.push(m[0]);
           continue;
         case "older_than":
           if (v === "1y") s.within = "older1y";
+          else if (relativeDay(v, 0)) s.before = relativeDay(v, 0);
+          else words.push(m[0]);
           continue;
         default:
           words.push(m[0]);
@@ -386,6 +469,18 @@ export function parseSearchQuery(
   s.q = words.join(" ").trim();
   if (!explicitFolder) s.folder = "all";
   return s;
+}
+
+/** "3d" / "2m" / "1y" back from today as "YYYY-MM-DD" (or ""). */
+function relativeDay(v: string, _plus: number, now: Date = new Date()): string {
+  const m = /^(\d+)([dmy])$/.exec(v);
+  if (!m) return "";
+  const n = +m[1];
+  const d = new Date(now);
+  if (m[2] === "d") d.setDate(d.getDate() - n);
+  else if (m[2] === "m") d.setMonth(d.getMonth() - n);
+  else d.setFullYear(d.getFullYear() - n);
+  return validDay(`${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}`);
 }
 
 function quote(v: string) {
@@ -411,7 +506,9 @@ export function stateToQuery(
     else if (s.folder !== "all") parts.push(`in:${s.folder}`);
   }
   if (s.unread) parts.push("is:unread");
-  if (s.read) parts.push("is:read");
+  if (s.subject) parts.push(`subject:${quote(s.subject)}`);
+  if (s.after) parts.push(`after:${s.after.replace(/-/g, "/")}`);
+  if (s.before) parts.push(`before:${s.before.replace(/-/g, "/")}`);
   if (s.attachment) parts.push("has:attachment");
   if (s.category) parts.push(`category:${s.category}`);
   if (s.within === "older1y") parts.push("older_than:1y");
@@ -485,6 +582,7 @@ export type ShortcutCommand =
   | "goDrafts"
   | "goArchive"
   | "goSnoozed"
+  | "goTrash"
   | "selectAll"
   | "selectNone"
   | "selectRead"
@@ -509,6 +607,7 @@ const G_MAP: Record<string, ShortcutCommand> = {
   d: "goDrafts",
   a: "goArchive",
   b: "goSnoozed",
+  x: "goTrash",
 };
 
 const STAR_MAP: Record<string, ShortcutCommand> = {
@@ -580,7 +679,6 @@ export function shortcutFor(e: KeyLike): ShortcutCommand | null {
       return "back";
     case "e":
     case "y":
-    case "m":
       return "archive";
     case "]":
       return "archiveOlder";
@@ -641,6 +739,7 @@ export const SHORTCUT_HELP: Array<{
       { keys: "g then t", label: "Go to Sent" },
       { keys: "g then d", label: "Go to Drafts" },
       { keys: "g then a", label: "Go to Archive" },
+      { keys: "g then x", label: "Go to Trash" },
     ],
   },
   {
@@ -675,7 +774,7 @@ export const SHORTCUT_HELP: Array<{
       { keys: "s", label: "Star / unstar" },
       { keys: "e", label: "Archive" },
       { keys: "] / [", label: "Archive and go older / newer" },
-      { keys: "#", label: "Delete" },
+      { keys: "#", label: "Delete (to Trash)" },
       { keys: "b", label: "Snooze" },
       { keys: "Shift + I / U", label: "Mark as read / unread" },
       { keys: ". or v", label: "More actions" },

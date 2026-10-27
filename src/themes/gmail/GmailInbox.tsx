@@ -10,12 +10,17 @@ import { RotateCw, WifiOff } from "lucide-react";
 import {
   EMPTY_MAIL_ROW_STATE,
   fetchConversationEmails,
+  fetchGroupedIds,
+  fetchGroupedPeople,
+  deletePerson,
+  setCategoryOverride,
   fetchPerson,
   fetchPersonEmails,
   markEmailRead,
   type Email,
   type GroupedItem,
   type MailCategory,
+  type MailItemRef,
 } from "@/lib/api";
 import { itemKey, itemTitle } from "@/hooks/useMailList";
 import { usePullToRefresh } from "@/hooks/usePullToRefresh";
@@ -46,6 +51,7 @@ import {
 } from "./lib";
 import { useGmailShell, useGmailView, useIsMobile, useOnline } from "./state";
 import {
+  senderAddresses,
   senderEmail,
   type ConversationHandle,
   type RowActions,
@@ -86,7 +92,12 @@ import type { InlineMode } from "./InlineComposer";
 type Patch = Partial<
   Pick<
     GroupedItem,
-    "starred" | "pinned" | "unreadCount" | "archivedAt" | "snoozedUntil"
+    | "starred"
+    | "pinned"
+    | "unreadCount"
+    | "archivedAt"
+    | "snoozedUntil"
+    | "trashedAt"
   >
 >;
 
@@ -141,7 +152,12 @@ export default function GmailInbox() {
   const state = parseListState(params);
   const searching = isSearch(state);
   const tabsOn = view.tabs;
-  const fq = folderQuery(state, tabsOn);
+  // Dates in the query are relative to "now", so compute once per URL.
+  const fq = useMemo(
+    () => folderQuery(state, tabsOn),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [params.toString(), tabsOn],
+  );
   const showTabs =
     tabsOn && state.folder === "inbox" && !state.label && !searching;
   const activeTab: MailCategory = state.tab ?? "primary";
@@ -158,7 +174,9 @@ export default function GmailInbox() {
     hasAttachment: state.attachment || undefined,
     from: state.from || undefined,
     category: fq.category,
-    sort: inboxType === "unread" ? "unread" : undefined,
+    after: fq.after,
+    before: fq.before,
+    subject: state.subject || undefined,
   });
   const queryKey = JSON.stringify([fq, state, inboxType]);
 
@@ -176,6 +194,17 @@ export default function GmailInbox() {
   useEffect(() => {
     if (list.lastLoaded) refreshCounts();
   }, [list.lastLoaded, refreshCounts]);
+  // Opening a tab marks it seen (its "N new" badge counts from here).
+  const { setPreferences } = prefs;
+  useEffect(() => {
+    if (!showTabs || list.loading) return;
+    const now = Math.floor(Date.now() / 1000);
+    void setPreferences({ tabSeen: { [activeTab]: now } }).then(() =>
+      refreshCounts(),
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showTabs, activeTab, list.loading]);
+
   const stats = list.stats ?? shell.stats;
   const identities = stats?.senderIdentities ?? [];
   const labels = useMemo(() => labelsFrom(stats), [stats]);
@@ -193,27 +222,49 @@ export default function GmailInbox() {
     setEarlier([]);
   }, [queryKey]);
 
-  const filterClient = useCallback(
-    (its: GroupedItem[]) => {
-      const { after, before } = withinRange(state.within);
-      const out = its.filter((it) => {
-        if (state.read && it.unreadCount > 0) return false;
-        if (after !== null && it.lastEmailAt < after) return false;
-        if (before !== null && it.lastEmailAt > before) return false;
-        return true;
-      });
-      if (inboxType === "starred")
-        return [...out].sort((a, b) => Number(b.starred) - Number(a.starred));
-      return out;
-    },
-    [state.read, state.within, inboxType],
+  // "Unread first" / "Starred first": the top section is its own server
+  // query (every unread / starred row in this view, newest first); the
+  // rest of the list is the normal query without those rows.
+  const [priority, setPriority] = useState<{
+    items: GroupedItem[];
+    total: number;
+  } | null>(null);
+  useEffect(() => {
+    if (inboxType === "default") {
+      setPriority(null);
+      return;
+    }
+    let cancelled = false;
+    fetchGroupedPeople({
+      ...list.folderParams(),
+      ...(inboxType === "unread" ? { unread: true } : { starred: true }),
+      limit: 50,
+    })
+      .then((r) => !cancelled && setPriority({ items: r.data, total: r.total }))
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [inboxType, queryKey, list.lastLoaded]);
+
+  const isPriority = useCallback(
+    (it: GroupedItem) =>
+      inboxType === "unread"
+        ? it.unreadCount > 0
+        : inboxType === "starred"
+          ? it.starred
+          : false,
+    [inboxType],
   );
 
-  const displayed = useMemo(
-    () =>
-      filterClient(isMobile ? dedupe([...earlier, ...list.items]) : list.items),
-    [filterClient, isMobile, earlier, list.items],
-  );
+  const displayed = useMemo(() => {
+    const base = isMobile ? dedupe([...earlier, ...list.items]) : list.items;
+    if (!priority) return base;
+    const top = priority.items.filter(isPriority);
+    const topKeys = new Set(top.map(itemKey));
+    return [...top, ...base.filter((it) => !topKeys.has(itemKey(it)))];
+  }, [isMobile, earlier, list.items, priority, isPriority]);
 
   /* ── open conversation (URL) ── */
   const openRef =
@@ -306,7 +357,8 @@ export default function GmailInbox() {
 
   /* ── selection & keyboard cursor ── */
   const [selectedKeys, setSelectedKeys] = useState<Set<string>>(new Set());
-  const [allItems, setAllItems] = useState<GroupedItem[] | null>(null);
+  // "Select all N conversations": refs for every matching row (server).
+  const [allRefs, setAllRefs] = useState<MailItemRef[] | null>(null);
   const [allLoading, setAllLoading] = useState(false);
   const [focusedKey, setFocusedKey] = useState<string | null>(null);
   // The row cursor only shows once the keyboard is used, like Gmail.
@@ -314,11 +366,11 @@ export default function GmailInbox() {
   const anchorRef = useRef<number | null>(null);
   useEffect(() => {
     setSelectedKeys(new Set());
-    setAllItems(null);
+    setAllRefs(null);
     anchorRef.current = null;
   }, [queryKey, list.page]);
   const pageSelected = displayed.filter((it) => selectedKeys.has(itemKey(it)));
-  const selected = allItems ?? pageSelected;
+  const selected = pageSelected;
   const focusedIndex = Math.max(
     0,
     displayed.findIndex((it) => itemKey(it) === focusedKey),
@@ -362,7 +414,7 @@ export default function GmailInbox() {
 
   const toggleSelect = useCallback(
     (item: GroupedItem, range = false) => {
-      setAllItems(null);
+      setAllRefs(null);
       const idx = displayed.findIndex((it) => itemKey(it) === itemKey(item));
       setSelectedKeys((prev) => {
         const next = new Set(prev);
@@ -386,7 +438,7 @@ export default function GmailInbox() {
 
   const selectPreset = useCallback(
     (p: SelectPreset) => {
-      setAllItems(null);
+      setAllRefs(null);
       const pick = (f: (it: GroupedItem) => boolean) =>
         setSelectedKeys(new Set(displayed.filter(f).map(itemKey)));
       switch (p) {
@@ -409,18 +461,21 @@ export default function GmailInbox() {
 
   const clearSelection = () => {
     setSelectedKeys(new Set());
-    setAllItems(null);
+    setAllRefs(null);
   };
 
   /* ── dialogs & menus ── */
   const [confirm, setConfirm] = useState<{
     items: GroupedItem[];
     after?: () => void;
+    /** Every row matching the view (Select all N / Empty Trash). */
+    all?: boolean;
   } | null>(null);
   const [pick, setPick] = useState<{
     items: GroupedItem[];
     presets: boolean;
     after?: () => void;
+    all?: boolean;
   } | null>(null);
   const [menu, setMenu] = useState<RowMenuState | null>(null);
   const [searchOpen, setSearchOpen] = useState(false);
@@ -428,6 +483,21 @@ export default function GmailInbox() {
   /* ── actions ── */
   const patchLocal = (targets: GroupedItem[], patch: Patch | "remove") => {
     const keys = new Set(targets.map(itemKey));
+    setPriority((p) =>
+      p
+        ? {
+            ...p,
+            items:
+              patch === "remove"
+                ? p.items.filter((it) => !keys.has(itemKey(it)))
+                : p.items.map((it) =>
+                    keys.has(itemKey(it))
+                      ? ({ ...it, ...patch } as GroupedItem)
+                      : it,
+                  ),
+          }
+        : p,
+    );
     setEarlier((prev) =>
       patch === "remove"
         ? prev.filter((it) => !keys.has(itemKey(it)))
@@ -446,7 +516,7 @@ export default function GmailInbox() {
         keys.forEach((k) => next.delete(k));
         return next;
       });
-      setAllItems(null);
+      setAllRefs(null);
     }
   };
 
@@ -479,7 +549,6 @@ export default function GmailInbox() {
 
   const act: RowActions = {
     archive: (its) => doArchive(its),
-    mute: (its) => doArchive(its, "muted"),
     moveToInbox: (its) => {
       const archived = its.filter((i) => i.archivedAt);
       const snoozed = its.filter((i) => i.snoozedUntil);
@@ -494,15 +563,72 @@ export default function GmailInbox() {
       if (leaves) leaveIfOpen(its);
     },
     requestDelete: (its, after) => {
+      const inTrash =
+        its.some((i) => !!i.trashedAt) || state.folder === "trash";
+      if (!inTrash) {
+        // Gmail's Delete: to Trash, with Undo.
+        void list.actions.trash(its);
+        patchLocal(
+          its,
+          state.folder === "all"
+            ? { trashedAt: Math.floor(Date.now() / 1000) }
+            : "remove",
+        );
+        leaveIfOpen(its);
+        after?.();
+        return;
+      }
       if (!its.some((i) => i.type === "person")) {
         showToast({
           kind: "info",
           message:
-            "Group conversations can't be deleted. Archive them instead.",
+            "Group conversations can't be deleted forever. They stay in Trash until restored.",
         });
         return;
       }
       setConfirm({ items: its, after });
+    },
+    restore: (its) => {
+      void list.actions.restore(its);
+      patchLocal(
+        its,
+        state.folder === "trash" ? "remove" : { trashedAt: null },
+      );
+      if (state.folder === "trash") leaveIfOpen(its);
+    },
+    moveToCategory: (its, category) => {
+      const senders = senderAddresses(its);
+      if (!senders.length) return;
+      setCategoryOverride(senders, category)
+        .then(() => {
+          list.refresh();
+          refreshCounts();
+          const undo = () =>
+            setCategoryOverride(senders, null)
+              .then(() => {
+                list.refresh();
+                refreshCounts();
+              })
+              .catch(() => {});
+          list.setUndo(undo);
+          showToast({
+            kind: "info",
+            message: `${senders.length === 1 ? "Sender" : `${senders.length} senders`} moved to ${CATEGORY_LABELS[category]}. Future mail goes there too.`,
+            action: {
+              label: "Undo",
+              onClick: (dismiss) => {
+                dismiss();
+                void undo();
+              },
+            },
+          });
+        })
+        .catch((e) =>
+          showToast({
+            kind: "error",
+            message: e instanceof Error ? e.message : "Could not move sender",
+          }),
+        );
     },
     markRead: (its) => {
       const unread = its.filter((i) => i.unreadCount > 0);
@@ -582,6 +708,113 @@ export default function GmailInbox() {
     showLabel: (address) =>
       navigate(`/${buildListSearch({ folder: "all", label: address })}`),
   };
+  /** Bulk actions on every row matching the view ("Select all N"). */
+  const doAll = (
+    patch: Parameters<typeof list.actions.applyToAll>[0],
+    message: string,
+    undo?: Parameters<typeof list.actions.applyToAll>[2],
+  ) => {
+    void list.actions.applyToAll(patch, message, undo);
+    clearSelection();
+  };
+  const deleteForeverAll = async () => {
+    try {
+      const { data } = await fetchGroupedIds(list.folderParams());
+      const people = data.filter((r) => r.type === "person");
+      for (let i = 0; i < people.length; i += 8)
+        await Promise.all(
+          people.slice(i, i + 8).map((p) => deletePerson(p.id)),
+        );
+      showToast({
+        kind: "success",
+        message: `${people.length} conversation${people.length === 1 ? "" : "s"} deleted forever`,
+      });
+      clearSelection();
+      list.refresh();
+      refreshCounts();
+    } catch (e) {
+      showToast({
+        kind: "error",
+        message: e instanceof Error ? e.message : "Could not delete",
+      });
+    }
+  };
+  const allAct: RowActions = {
+    ...act,
+    archive: () =>
+      doAll({ archived: true }, "{n} conversations archived", {
+        archived: false,
+      }),
+    moveToInbox: () =>
+      doAll(
+        { archived: false, snoozedUntil: null },
+        "{n} conversations moved to Inbox",
+      ),
+    restore: () =>
+      doAll({ trashed: false }, "{n} conversations restored", {
+        trashed: true,
+      }),
+    requestDelete: () =>
+      state.folder === "trash"
+        ? setConfirm({ items: [], all: true })
+        : doAll({ trashed: true }, "{n} conversations moved to Trash", {
+            trashed: false,
+          }),
+    markRead: () => {
+      void list.actions.markAllRead();
+      clearSelection();
+    },
+    markUnread: async () => {
+      const refs = allRefs ?? [];
+      try {
+        for (let i = 0; i < refs.length; i += 8) {
+          const ids = await Promise.all(
+            refs
+              .slice(i, i + 8)
+              .map((r) => latestReceivedId(r as unknown as GroupedItem)),
+          );
+          await Promise.all(
+            ids
+              .filter((x): x is string => !!x)
+              .map((id) => markEmailRead(id, false)),
+          );
+        }
+        showToast({
+          kind: "info",
+          message: `${refs.length} conversations marked as unread`,
+        });
+        clearSelection();
+        list.refresh();
+      } catch (e) {
+        showToast({
+          kind: "error",
+          message: e instanceof Error ? e.message : "Could not mark unread",
+        });
+      }
+    },
+    snooze: (_its, until) =>
+      doAll({ snoozedUntil: until }, "{n} conversations snoozed", {
+        snoozedUntil: null,
+      }),
+    pickSnooze: () => setPick({ items: [], presets: true, all: true }),
+    star: (_its, value) =>
+      doAll(
+        { starred: value ?? true },
+        `{n} conversations ${value === false ? "unstarred" : "starred"}`,
+        {
+          starred: !(value ?? true),
+        },
+      ),
+    pin: (_its, value) =>
+      doAll(
+        { pinned: value ?? true },
+        `{n} conversations ${value === false ? "unpinned" : "pinned"}`,
+        {
+          pinned: !(value ?? true),
+        },
+      ),
+  };
+
   const actRef = useRef(act);
   actRef.current = act;
 
@@ -749,6 +982,9 @@ export default function GmailInbox() {
           break;
         case "goSnoozed":
           go({ folder: "snoozed" });
+          break;
+        case "goTrash":
+          go({ folder: "trash" });
           break;
         case "selectAll":
           selectPreset("all");
@@ -951,19 +1187,28 @@ export default function GmailInbox() {
       <ConfirmDialog
         open={!!confirm}
         title={
-          confirm && confirm.items.filter((i) => i.type === "person").length > 1
-            ? `Delete ${confirm.items.filter((i) => i.type === "person").length} conversations forever?`
-            : "Delete forever?"
+          confirm?.all
+            ? "Empty Trash?"
+            : confirm &&
+                confirm.items.filter((i) => i.type === "person").length > 1
+              ? `Delete ${confirm.items.filter((i) => i.type === "person").length} conversations forever?`
+              : "Delete forever?"
         }
         body={
-          "This permanently deletes the conversation and every message and attachment in it. There is no trash, so this can't be undone." +
-          (confirm?.items.some((i) => i.type === "group")
-            ? " Group conversations in the selection are skipped."
+          (confirm?.all
+            ? "Every conversation in Trash, with all its messages and attachments, will be deleted forever. This can't be undone."
+            : "This deletes the conversation and every message and attachment in it forever. This can't be undone.") +
+          (confirm?.all || confirm?.items.some((i) => i.type === "group")
+            ? " Group conversations stay in Trash (they can only be restored)."
             : "")
         }
-        confirmLabel="Delete forever"
+        confirmLabel={confirm?.all ? "Empty Trash" : "Delete forever"}
         onConfirm={() => {
           if (!confirm) return;
+          if (confirm.all) {
+            void deleteForeverAll();
+            return;
+          }
           const people = confirm.items.filter((i) => i.type === "person");
           void list.actions.deleteForever(people);
           patchLocal(people, "remove");
@@ -978,7 +1223,8 @@ export default function GmailInbox() {
         onClose={() => setPick(null)}
         onPick={(until) => {
           if (!pick) return;
-          act.snooze(pick.items, until);
+          if (pick.all) allAct.snooze([], until);
+          else act.snooze(pick.items, until);
           pick.after?.();
         }}
       />
@@ -1032,7 +1278,7 @@ export default function GmailInbox() {
         key={itemKey(it)}
         item={it}
         folder={state.folder}
-        selected={selectedKeys.has(itemKey(it)) || !!allItems}
+        selected={selectedKeys.has(itemKey(it)) || !!allRefs}
         focused={
           (kbdNav && focused ? itemKey(focused) === itemKey(it) : false) ||
           (pane !== "none" && openKey === itemKey(it))
@@ -1063,6 +1309,13 @@ export default function GmailInbox() {
       <>
         <div className="gm-section-head">
           {inboxType === "unread" ? "Unread" : "Starred"}
+          {priority && (
+            <span className="ml-auto text-xs font-normal text-text-secondary">
+              {priority.total > first.length
+                ? `1–${first.length} of ${priority.total.toLocaleString()}`
+                : priority.total.toLocaleString()}
+            </span>
+          )}
         </div>
         {first.length ? (
           renderRows(first, narrow)
@@ -1231,7 +1484,7 @@ export default function GmailInbox() {
             </p>
             {showTabs && activeTab === "primary" && (
               <CategoryRows
-                counts={shell.counts.categories}
+                counts={shell.counts.categoriesNew}
                 onOpen={(c) =>
                   navigate(`/${buildListSearch({ folder: "inbox", tab: c })}`)
                 }
@@ -1277,13 +1530,14 @@ export default function GmailInbox() {
       items={displayed}
       selected={selected}
       folder={state.folder}
-      act={act}
+      act={allRefs ? allAct : act}
+      allMode={!!allRefs}
       onSelectPreset={selectPreset}
       onRefresh={() => {
         list.refresh();
         refreshCounts();
       }}
-      onMarkAllRead={() => act.markRead(displayed)}
+      onMarkAllRead={() => void list.actions.markAllRead()}
       range={rangeLabel(list.page, PAGE_SIZE, list.total)}
       canPrev={list.page > 1}
       canNext={list.page < list.pageCount}
@@ -1318,24 +1572,24 @@ export default function GmailInbox() {
       {showTabs && (
         <CategoryTabs
           active={activeTab}
-          counts={shell.counts.categories}
+          counts={shell.counts.categoriesNew}
           onSelect={(c) =>
             navigate(`/${buildListSearch({ folder: "inbox", tab: c })}`)
           }
         />
       )}
-      {(pageAllSelected || allItems) && list.total > displayed.length && (
+      {(pageAllSelected || allRefs) && list.total > displayed.length && (
         <SelectAllBanner
           pageCount={displayed.length}
-          total={list.total}
+          total={allRefs?.length ?? list.total}
           where={folderWhere}
-          allSelected={!!allItems}
+          allSelected={!!allRefs}
           loading={allLoading}
           onSelectAll={() => {
             setAllLoading(true);
             list
               .fetchAll()
-              .then((all) => setAllItems(filterClient(all)))
+              .then((all) => setAllRefs(all))
               .catch(() =>
                 showToast({ kind: "error", message: "Could not select all" }),
               )
@@ -1345,6 +1599,25 @@ export default function GmailInbox() {
         />
       )}
       {offlineBanner}
+      {state.folder === "trash" && !searching && displayed.length > 0 && (
+        <div
+          className="flex flex-none items-center justify-center gap-3 border-b border-border bg-bg-subtle px-4 py-2 text-sm"
+          data-testid="gmail-trash-banner"
+        >
+          <span className="text-text-secondary">
+            Conversations in Trash are hidden everywhere else. New mail brings
+            one back.
+          </span>
+          <button
+            type="button"
+            className="font-medium text-accent hover:underline"
+            onClick={() => setConfirm({ items: [], all: true })}
+            data-testid="gmail-empty-trash"
+          >
+            Empty Trash now
+          </button>
+        </div>
+      )}
       <div
         className={cn(
           "gm-list min-h-0 flex-1 overflow-y-auto",

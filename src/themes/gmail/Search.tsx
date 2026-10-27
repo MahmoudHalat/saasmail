@@ -404,6 +404,7 @@ function AdvancedSearch({
     ["sent", "Sent Mail"],
     ["drafts", "Drafts"],
     ["archive", "Archive"],
+    ["trash", "Trash"],
   ];
   return (
     <form
@@ -447,6 +448,37 @@ function AdvancedSearch({
           className={field}
         />
       </label>
+      <label className={row}>
+        <span className={lbl}>Subject</span>
+        <input
+          value={s.subject}
+          onChange={(e) => setS({ ...s, subject: e.target.value })}
+          className={field}
+        />
+      </label>
+      <div className={row}>
+        <span className={lbl}>Dates</span>
+        <label className="flex min-w-0 flex-1 items-end gap-2">
+          <span className="pb-1 text-text-secondary">After</span>
+          <input
+            type="date"
+            value={s.after}
+            onChange={(e) => setS({ ...s, after: e.target.value })}
+            className={field}
+            aria-label="After date"
+          />
+        </label>
+        <label className="flex min-w-0 flex-1 items-end gap-2">
+          <span className="pb-1 text-text-secondary">Before</span>
+          <input
+            type="date"
+            value={s.before}
+            onChange={(e) => setS({ ...s, before: e.target.value })}
+            className={field}
+            aria-label="Before date"
+          />
+        </label>
+      </div>
       <label className={row}>
         <span className={lbl}>Date within</span>
         <select
@@ -492,9 +524,7 @@ function AdvancedSearch({
             type="checkbox"
             className="gm-check"
             checked={s.unread}
-            onChange={(e) =>
-              setS({ ...s, unread: e.target.checked, read: false })
-            }
+            onChange={(e) => setS({ ...s, unread: e.target.checked })}
           />
           Unread only
         </label>
@@ -510,8 +540,10 @@ function AdvancedSearch({
               from: "",
               label: null,
               unread: false,
-              read: false,
               attachment: false,
+              subject: "",
+              after: "",
+              before: "",
               within: "",
               category: null,
             })
@@ -721,7 +753,7 @@ export function SearchChips({
 
       <Chip
         active={state.unread}
-        onClick={() => set({ unread: !state.unread, read: false })}
+        onClick={() => set({ unread: !state.unread })}
         testId="gmail-chip-unread"
       >
         Is unread

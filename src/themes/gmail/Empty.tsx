@@ -8,6 +8,7 @@ import {
   Star,
   StickyNote,
   Tag,
+  Trash2,
 } from "lucide-react";
 import type { ReactNode } from "react";
 import type { ListState } from "./lib";
@@ -86,6 +87,12 @@ export function EmptyState({
         title = "No sequenced conversations";
         body =
           "People enrolled in a sequence show up here while their follow-ups are scheduled.";
+        break;
+      case "trash":
+        icon = <Trash2 size={40} />;
+        title = "No conversations in Trash";
+        body =
+          "Deleted conversations wait here until you empty Trash or delete them forever. New mail brings a conversation back.";
         break;
       case "archive":
         icon = <Archive size={40} />;

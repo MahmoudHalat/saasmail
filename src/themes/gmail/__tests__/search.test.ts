@@ -1,12 +1,14 @@
 import { describe, expect, it } from "vitest";
 import {
   buildListSearch,
+  dateQuery,
   folderQuery,
   parseListState,
   parseSearchQuery,
   pushRecent,
   resolveShortcut,
   stateToQuery,
+  validDay,
   withinRange,
 } from "../lib";
 
@@ -37,7 +39,6 @@ describe("parseSearchQuery", () => {
     expect(parseSearchQuery('from:"Ana Lopez"').from).toBe("Ana Lopez");
     expect(parseSearchQuery("is:starred").folder).toBe("starred");
     expect(parseSearchQuery("is:snoozed").folder).toBe("snoozed");
-    expect(parseSearchQuery("is:read").read).toBe(true);
     expect(parseSearchQuery("in:anywhere").folder).toBe("all");
     expect(parseSearchQuery("in:sent").folder).toBe("sent");
     expect(parseSearchQuery("in:drafts").folder).toBe("drafts");
@@ -136,5 +137,49 @@ describe("misc", () => {
     expect(pushRecent(["a", "b"], "b")).toEqual(["b", "a"]);
     expect(pushRecent(["a"], "  ")).toEqual(["a"]);
     expect(pushRecent(["1", "2", "3"], "4", 3)).toEqual(["4", "1", "2"]);
+  });
+});
+
+describe("server-side search fields", () => {
+  it("parses subject:, to:, before: and after:", () => {
+    const s = parseSearchQuery(
+      'subject:"quarterly plan" to:support after:2026/01/05 before:2026-02-01 hi',
+      labels,
+    );
+    expect(s.subject).toBe("quarterly plan");
+    expect(s.label).toBe("support@acme.com");
+    expect(s.after).toBe("2026-01-05");
+    expect(s.before).toBe("2026-02-01");
+    expect(s.q).toBe("hi");
+  });
+  it("keeps bad dates and unsupported operators as text", () => {
+    expect(parseSearchQuery("after:soon").q).toBe("after:soon");
+    expect(parseSearchQuery("is:read").q).toBe("is:read");
+    expect(parseSearchQuery("in:trash").folder).toBe("trash");
+  });
+  it("turns relative newer_than/older_than into dates", () => {
+    const s = parseSearchQuery("newer_than:3d older_than:2y");
+    expect(s.after).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    expect(s.before).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+  });
+  it("sends date windows to the server", () => {
+    const now = new Date(2026, 9, 26, 12);
+    const day = (y: number, m: number, d: number) =>
+      Math.floor(new Date(y, m - 1, d).getTime() / 1000);
+    expect(
+      dateQuery({ within: "", after: "2026-10-01", before: "2026-10-10" }, now),
+    ).toEqual({ after: day(2026, 10, 1), before: day(2026, 10, 10) });
+    const w = dateQuery({ within: "7d", after: "2026-10-25", before: "" }, now);
+    expect(w.after).toBe(day(2026, 10, 25));
+    const s = parseListState(
+      new URLSearchParams(
+        buildListSearch({ folder: "all", after: "2026-10-01" }),
+      ),
+    );
+    expect(folderQuery(s, true).after).toBe(day(2026, 10, 1));
+  });
+  it("validates days", () => {
+    expect(validDay("2026/2/30")).toBe("");
+    expect(validDay("2026-2-3")).toBe("2026-02-03");
   });
 });

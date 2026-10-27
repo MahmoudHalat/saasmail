@@ -1,7 +1,8 @@
 import { memo, type ReactNode } from "react";
 import {
   Archive,
-  BellOff,
+  ArchiveRestore,
+  FolderInput,
   ChevronDown,
   ChevronLeft,
   ChevronRight,
@@ -52,6 +53,8 @@ interface ToolbarProps {
   onPrev: () => void;
   onNext: () => void;
   compactRange?: boolean;
+  /** "Select all N" is on: per-sender actions are hidden. */
+  allMode?: boolean;
 }
 
 function IconBtn({
@@ -95,6 +98,7 @@ export function ListToolbar({
   canNext,
   onPrev,
   onNext,
+  allMode,
 }: ToolbarProps) {
   const n = selected.length;
   const all = n > 0 && n === items.length;
@@ -103,7 +107,8 @@ export function ListToolbar({
   const allStarred = n > 0 && selected.every((s) => s.starred);
   const allPinned = n > 0 && selected.every((s) => s.pinned);
   const anyUnread = selected.some((s) => s.unreadCount > 0);
-  const canDelete = selected.some((s) => s.type === "person");
+  const inTrash = folder === "trash";
+  const canDelete = !inTrash || selected.some((s) => s.type === "person");
 
   return (
     <div
@@ -178,7 +183,15 @@ export function ListToolbar({
         </>
       ) : (
         <div className="flex items-center gap-0.5" data-testid="gmail-bulk-bar">
-          {anyArchived || folder === "archive" || folder === "snoozed" ? (
+          {inTrash ? (
+            <IconBtn
+              label="Restore"
+              onClick={() => act.restore(selected)}
+              testId="gmail-bulk-restore"
+            >
+              <ArchiveRestore size={20} />
+            </IconBtn>
+          ) : anyArchived || folder === "archive" || folder === "snoozed" ? (
             <IconBtn
               label="Move to inbox"
               onClick={() => act.moveToInbox(selected)}
@@ -196,10 +209,15 @@ export function ListToolbar({
           )}
           <IconBtn
             label={
-              canDelete ? "Delete" : "Group conversations can't be deleted"
+              inTrash
+                ? canDelete
+                  ? "Delete forever"
+                  : "Group conversations stay in Trash"
+                : "Delete"
             }
             onClick={() => act.requestDelete(selected)}
             disabled={!canDelete}
+            testId="gmail-bulk-delete"
           >
             <Trash2 size={20} />
           </IconBtn>
@@ -280,12 +298,18 @@ export function ListToolbar({
                 Mark as read
               </GmMenuItem>
             )}
-            <GmMenuItem
-              icon={<BellOff size={20} />}
-              onSelect={() => act.mute(selected)}
-            >
-              Mute
-            </GmMenuItem>
+            {!allMode &&
+              (
+                ["primary", "promotions", "social", "updates"] as MailCategory[]
+              ).map((c) => (
+                <GmMenuItem
+                  key={c}
+                  icon={<FolderInput size={20} />}
+                  onSelect={() => act.moveToCategory(selected, c)}
+                >
+                  Move to {CATEGORY_LABELS[c]}
+                </GmMenuItem>
+              ))}
             <GmMenuItem
               icon={<InboxIcon size={20} />}
               onSelect={() => act.moveToInbox(selected)}
@@ -523,7 +547,18 @@ export const MailRow = memo(function MailRow({
         className="gm-row-actions ml-2 flex-none items-center"
         onClick={stop}
       >
-        {inView ? (
+        {item.trashedAt ? (
+          <button
+            type="button"
+            className="gm-icon-btn gm-sm"
+            aria-label="Restore"
+            title="Restore"
+            onClick={() => act.restore([item])}
+            data-testid="gmail-row-restore"
+          >
+            <ArchiveRestore size={18} />
+          </button>
+        ) : inView ? (
           <button
             type="button"
             className="gm-icon-btn gm-sm"
@@ -548,14 +583,17 @@ export const MailRow = memo(function MailRow({
         <button
           type="button"
           className="gm-icon-btn gm-sm"
-          aria-label="Delete"
+          aria-label={item.trashedAt ? "Delete forever" : "Delete"}
           title={
-            item.type === "person"
+            !item.trashedAt
               ? "Delete"
-              : "Group conversations can't be deleted"
+              : item.type === "person"
+                ? "Delete forever"
+                : "Group conversations stay in Trash"
           }
-          disabled={item.type !== "person"}
+          disabled={!!item.trashedAt && item.type !== "person"}
           onClick={() => act.requestDelete([item])}
+          data-testid="gmail-row-delete"
         >
           <Trash2 size={18} />
         </button>

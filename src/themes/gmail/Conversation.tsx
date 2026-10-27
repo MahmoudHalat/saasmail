@@ -9,6 +9,7 @@ import {
 } from "react";
 import {
   Archive,
+  ArchiveRestore,
   ArrowLeft,
   ChevronLeft,
   ChevronRight,
@@ -29,6 +30,7 @@ import {
   ReplyAll,
   ShieldBan,
   Star,
+  Tags,
   Trash2,
 } from "lucide-react";
 import {
@@ -55,6 +57,8 @@ import ImageAttachments, {
 import type { ComposePrefill } from "@/pages/ComposeModal";
 import { cn } from "@/lib/utils";
 import {
+  CATEGORIES,
+  CATEGORY_LABELS,
   cleanSubject,
   formatFullDate,
   formatListDate,
@@ -66,6 +70,7 @@ import {
   type RowActions,
 } from "./actions";
 import { InlineComposer, type InlineMode } from "./InlineComposer";
+import { useCommonSettings } from "./state";
 import {
   Avatar,
   ConfirmDialog,
@@ -337,7 +342,7 @@ function MessageCard({
                     icon={<Code size={20} />}
                     onSelect={onViewOriginal}
                   >
-                    Show original
+                    Message details
                   </GmMenuItem>
                   <GmMenuItem
                     icon={<Link2 size={20} />}
@@ -445,6 +450,7 @@ export default function Conversation({
   onOpenNewWindow,
 }: Props) {
   const { data: session } = useSession();
+  const [common] = useCommonSettings();
   const me = session?.user;
   const [emails, setEmails] = useState<Email[] | null>(null);
   const [participants, setParticipants] = useState<Party[]>([]);
@@ -753,7 +759,14 @@ export default function Conversation({
   };
 
   const inView = inInboxView(item);
-  const canDelete = item.type === "person";
+  const trashed = !!item.trashedAt;
+  // Delete moves to Trash; inside Trash only people can be deleted forever.
+  const canDelete = !trashed || item.type === "person";
+  const deleteLabel = !trashed
+    ? "Delete"
+    : canDelete
+      ? "Delete forever"
+      : "Group conversations stay in Trash";
 
   /* ── toolbar ── */
   const tb = (
@@ -822,6 +835,16 @@ export default function Conversation({
         Forward
       </GmMenuItem>
       <GmMenuSep />
+      {CATEGORIES.filter((c) => c !== item.category).map((c) => (
+        <GmMenuItem
+          key={c}
+          icon={<Tags size={20} />}
+          onSelect={() => act.moveToCategory([item], c)}
+        >
+          Move to {CATEGORY_LABELS[c]}
+        </GmMenuItem>
+      ))}
+      <GmMenuSep />
       <GmMenuItem
         icon={<ShieldBan size={20} />}
         onSelect={() => void blockSender()}
@@ -833,7 +856,7 @@ export default function Conversation({
         onSelect={() => latest && setOriginal(latest)}
         disabled={!latest}
       >
-        Show original
+        Message details
       </GmMenuItem>
     </GmMenu>
   );
@@ -842,17 +865,16 @@ export default function Conversation({
     <div className="flex h-14 flex-none items-center gap-1 px-1 pt-[env(safe-area-inset-top)]">
       {tb("Back", <ArrowLeft size={24} />, onBack, { testId: "gmail-back" })}
       <div className="flex-1" />
-      {inView
-        ? tb("Archive", <Archive size={22} />, () => act.archive([item]))
-        : tb("Move to inbox", <InboxIcon size={22} />, () =>
-            act.moveToInbox([item]),
-          )}
-      {tb(
-        "Delete",
-        <Trash2 size={22} />,
-        () => act.requestDelete([item], onBack),
-        { disabled: !canDelete },
-      )}
+      {trashed
+        ? tb("Restore", <ArchiveRestore size={22} />, () => act.restore([item]))
+        : inView
+          ? tb("Archive", <Archive size={22} />, () => act.archive([item]))
+          : tb("Move to inbox", <InboxIcon size={22} />, () =>
+              act.moveToInbox([item]),
+            )}
+      {tb(deleteLabel, <Trash2 size={22} />, () => act.requestDelete([item]), {
+        disabled: !canDelete,
+      })}
       {tb("Mark as unread", <Mail size={22} />, () => {
         void act.markUnread([item]).then(onBack);
       })}
@@ -865,19 +887,25 @@ export default function Conversation({
           testId: "gmail-back",
         })}
       <span className="mx-1" />
-      {inView
-        ? tb("Archive", <Archive size={20} />, () => act.archive([item]), {
-            testId: "gmail-conv-archive",
-          })
-        : tb("Move to inbox", <InboxIcon size={20} />, () =>
-            act.moveToInbox([item]),
-          )}
-      {tb(
-        canDelete ? "Delete" : "Group conversations can't be deleted",
-        <Trash2 size={20} />,
-        () => act.requestDelete([item], onBack),
-        { disabled: !canDelete },
-      )}
+      {trashed
+        ? tb(
+            "Restore",
+            <ArchiveRestore size={20} />,
+            () => act.restore([item]),
+            {
+              testId: "gmail-conv-restore",
+            },
+          )
+        : inView
+          ? tb("Archive", <Archive size={20} />, () => act.archive([item]), {
+              testId: "gmail-conv-archive",
+            })
+          : tb("Move to inbox", <InboxIcon size={20} />, () =>
+              act.moveToInbox([item]),
+            )}
+      {tb(deleteLabel, <Trash2 size={20} />, () => act.requestDelete([item]), {
+        disabled: !canDelete,
+      })}
       <span className="mx-1 h-5 w-px bg-border" />
       {tb("Mark as unread", <Mail size={20} />, () => {
         void act.markUnread([item]).then(onBack);
@@ -1103,6 +1131,10 @@ export default function Conversation({
                     setInline({ mode: m, targetId: target.id })
                   }
                   onClose={() => setInline(null)}
+                  onReopen={() =>
+                    setInline({ mode: inline.mode, targetId: target.id })
+                  }
+                  undoSeconds={common.undoSendSeconds}
                   onSent={() => {
                     refetch();
                     onChanged();

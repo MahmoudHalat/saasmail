@@ -4,7 +4,9 @@ import { X } from "lucide-react";
 import type { ColorMode, UiTheme } from "@/lib/api";
 import { usePreferences } from "@/lib/preferences";
 import { cn } from "@/lib/utils";
+import { UNDO_SEND_CHOICES } from "@/lib/undo-send";
 import {
+  useCommonSettings,
   useGmailView,
   type GmailDensity,
   type InboxType,
@@ -79,7 +81,7 @@ function Thumb({ kind }: { kind: string }) {
 
 const SWIPE_LABELS: Record<SwipeAction, string> = {
   archive: "Archive",
-  delete: "Delete",
+  delete: "Delete (to Trash)",
   read: "Mark as read/unread",
   snooze: "Snooze",
   none: "None",
@@ -99,6 +101,7 @@ export function QuickSettings({
   const navigate = useNavigate();
   const prefs = usePreferences();
   const view = useGmailView();
+  const [common, setCommon] = useCommonSettings();
   const density: GmailDensity =
     prefs.density === "compact" ? "compact" : view.density;
 
@@ -300,6 +303,27 @@ export function QuickSettings({
               </select>
             </label>
           ))}
+        </div>
+
+        <div className={section}>
+          <p className={heading}>Undo send</p>
+          <label className="flex items-center justify-between gap-4 py-1.5 text-sm">
+            Send cancellation period
+            <select
+              className={select}
+              value={common.undoSendSeconds}
+              onChange={(e) =>
+                setCommon({ undoSendSeconds: Number(e.target.value) })
+              }
+              data-testid="gmail-qs-undo-send"
+            >
+              {UNDO_SEND_CHOICES.map((n) => (
+                <option key={n} value={n}>
+                  {n === 0 ? "Off" : `${n} seconds`}
+                </option>
+              ))}
+            </select>
+          </label>
         </div>
 
         <div className={section}>
