@@ -10,7 +10,7 @@ import {
   mailViewHref,
   type PageLink,
 } from "./nav";
-import { shellStore, useShell } from "./shellStore";
+import { useDefaultLayoutSettings } from "@/lib/default-layout-settings";
 import { useMailCounts } from "./useMailCounts";
 import AccountMenu from "./AccountMenu";
 
@@ -27,7 +27,8 @@ export default function Rail({ drawer }: { drawer: boolean }) {
   const { brandName } = useBranding();
   const { data: session } = useSession();
   const isAdmin = session?.user?.role === "admin";
-  const shut = useShell((s) => s.railShut) && !drawer;
+  const [{ railCollapsed }, setLayout] = useDefaultLayoutSettings();
+  const shut = railCollapsed && !drawer;
   const { pathname, search } = useLocation();
   const sp = new URLSearchParams(search);
   const onMail = pathname === "/" || pathname.startsWith("/inbox/");
@@ -146,7 +147,7 @@ export default function Rail({ drawer }: { drawer: boolean }) {
         <button
           type="button"
           className="snav-fold"
-          onClick={() => shellStore.set({ railShut: !shut })}
+          onClick={() => setLayout({ railCollapsed: !shut })}
           aria-label={shut ? "Expand sidebar" : "Collapse sidebar"}
           title={shut ? "Expand sidebar" : "Collapse sidebar"}
         >

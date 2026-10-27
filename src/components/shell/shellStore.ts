@@ -1,30 +1,19 @@
 import { useSyncExternalStore } from "react";
 
 /**
- * Small shared state for the portal shell: whether the command palette is
- * open and whether the rail is collapsed (persisted per browser).
+ * Small shared state for the portal shell: whether the command palette and
+ * the shortcuts sheet are open. (The rail's collapsed state is an account
+ * setting: see useDefaultLayoutSettings.)
  */
-const RAIL_KEY = "saasmail.railCollapsed";
-
 interface ShellState {
   cmdk: boolean;
   /** The keyboard shortcuts sheet ("?"). */
   keys: boolean;
-  railShut: boolean;
-}
-
-function readRail(): boolean {
-  try {
-    return window.localStorage.getItem(RAIL_KEY) === "1";
-  } catch {
-    return false;
-  }
 }
 
 let state: ShellState = {
   cmdk: false,
   keys: false,
-  railShut: typeof window === "undefined" ? false : readRail(),
 };
 const listeners = new Set<() => void>();
 
@@ -32,13 +21,6 @@ export const shellStore = {
   get: () => state,
   set(patch: Partial<ShellState>) {
     state = { ...state, ...patch };
-    if (patch.railShut !== undefined) {
-      try {
-        window.localStorage.setItem(RAIL_KEY, patch.railShut ? "1" : "0");
-      } catch {
-        /* storage may be unavailable */
-      }
-    }
     listeners.forEach((l) => l());
   },
   subscribe(l: () => void) {

@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useCallback } from "react";
+import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import * as DialogPrimitive from "@radix-ui/react-dialog";
 import { Check, PenSquare, Send, X } from "lucide-react";
 import TiptapEditor from "@/components/TiptapEditor";
@@ -11,12 +11,14 @@ import {
 import {
   sendEmail,
   fetchStats,
+  deleteDraft,
   type CcEntry,
   type EmailTemplate,
 } from "@/lib/api";
 import RecipientInput from "@/components/RecipientInput";
 import { TemplatePicker, TemplateVarsBar } from "@/components/ComposeTemplates";
-import { showToast } from "@/lib/toast";
+import { sendWithUndo } from "@/lib/undo-send";
+import { useCommonSettings } from "@/lib/default-layout-settings";
 import { useDraftAutosave } from "@/lib/use-draft-autosave";
 import { dispatchEmailSent } from "@/lib/email-events";
 import { getFromLabel } from "@/lib/format";
@@ -44,12 +46,24 @@ export interface ComposePrefill {
   cc?: CcEntry[];
   subject?: string;
   bodyHtml?: string;
+  /** Plain-text part to go with bodyHtml (an undone send reopens with it). */
+  bodyText?: string;
+  /** Attachments (an undone or failed send reopens with them). */
+  files?: File[];
+  /** Shown in the footer, e.g. why the last send failed. */
+  error?: string;
 }
 
 interface ComposeModalProps {
   open: boolean;
   onClose: () => void;
   prefill?: ComposePrefill | null;
+  /**
+   * Reopen the composer with this content. Undo Send needs it: the
+   * composer closes as soon as Send is pressed and comes back on Undo or
+   * when the send fails. Without it, sends go out at once (no Undo).
+   */
+  onReopen?: (prefill: ComposePrefill) => void;
 }
 
 /**
@@ -61,7 +75,11 @@ export default function ComposeModal({
   open,
   onClose,
   prefill,
+  onReopen,
 }: ComposeModalProps) {
+  const [{ undoSendSeconds }] = useCommonSettings();
+  const openRef = useRef(open);
+  openRef.current = open;
   const [to, setTo] = useState("");
   const [fromAddress, setFromAddress] = useState("");
   const [cc, setCc] = useState<CcEntry[]>([]);
@@ -145,7 +163,9 @@ export default function ComposeModal({
       setCc(prefill?.cc ?? []);
       setSubject(prefill?.subject ?? "");
       setBodyHtml(prefill?.bodyHtml ?? "");
-      setBodyText("");
+      setBodyText(prefill?.bodyText ?? "");
+      setFiles(prefill?.files ?? []);
+      setError(prefill?.error ?? "");
     } else {
       setTo("");
       setCc([]);
@@ -203,45 +223,70 @@ export default function ComposeModal({
     },
   });
 
-  async function handleSend() {
-    if (!to || bodyIsEmpty) return;
-    setSending(true);
+  function handleSend() {
+    if (!to || bodyIsEmpty || sending) return;
     setError("");
-    try {
-      // Concatenate the typed body + auto-attached signature on send.
-      // The signature is wrapped in `data-signature` so the chat-feed
-      // toggle can strip it back out cleanly.
-      // Use the sanitized signature — even the outbound payload that
-      // never touches the browser DOM gets the cleaned version.
-      const finalBody = safeSignatureHtml
-        ? `${bodyHtml}<div data-signature>${safeSignatureHtml}</div>`
-        : bodyHtml;
-      await sendEmail({
-        to,
-        fromAddress,
-        ...(cc.length > 0 ? { cc } : {}),
-        subject,
-        bodyHtml: finalBody,
-        ...(bodyText.trim() ? { bodyText } : {}),
-        ...(files.length > 0 ? { files: files.map((file) => ({ file })) } : {}),
-      });
-      dispatchEmailSent({ fromAddress, to, origin: "compose" });
-      // The message went out — discard its draft so it doesn't reappear.
-      clearDraft();
-      setFiles([]);
-      onClose();
-      showToast({
-        kind: "success",
-        message: "Message sent",
-        description: `To ${to}${subject.trim() ? ` · ${subject.trim()}` : ""}`,
-      });
-    } catch {
-      setError(
-        "Couldn't send. Your draft is saved; check the address and try again.",
-      );
-    } finally {
-      setSending(false);
+    // Concatenate the typed body + auto-attached signature on send.
+    // The signature is wrapped in `data-signature` so the chat-feed
+    // toggle can strip it back out cleanly.
+    // Use the sanitized signature — even the outbound payload that
+    // never touches the browser DOM gets the cleaned version.
+    const finalBody = safeSignatureHtml
+      ? `${bodyHtml}<div data-signature>${safeSignatureHtml}</div>`
+      : bodyHtml;
+    const payload = {
+      to,
+      fromAddress,
+      ...(cc.length > 0 ? { cc } : {}),
+      subject,
+      bodyHtml: finalBody,
+      ...(bodyText.trim() ? { bodyText } : {}),
+      ...(files.length > 0 ? { files: files.map((file) => ({ file })) } : {}),
+    };
+    // What the composer reopens with on Undo or on failure.
+    const snapshot: ComposePrefill = {
+      from: fromAddress,
+      to,
+      cc,
+      subject,
+      bodyHtml,
+      bodyText,
+      files,
+    };
+    const failure =
+      "Couldn't send. Your draft is saved; check the address and try again.";
+
+    if (!onReopen) {
+      // No way to bring the composer back: send in place, as before.
+      setSending(true);
+      sendEmail(payload)
+        .then(() => {
+          dispatchEmailSent({ fromAddress, to, origin: "compose" });
+          clearDraft();
+          setFiles([]);
+          onClose();
+        })
+        .catch(() => setError(failure))
+        .finally(() => setSending(false));
+      return;
     }
+
+    // Undo Send: the composer closes at once (its draft is kept by the
+    // close-flush), the message waits for the undo window, then goes.
+    onClose();
+    sendWithUndo({
+      seconds: undoSendSeconds,
+      label: "Sending…",
+      send: () => sendEmail(payload).then(() => undefined),
+      onUndo: () => onReopen(snapshot),
+      onSent: () => {
+        dispatchEmailSent({ fromAddress, to, origin: "compose" });
+        // The message went out: drop its draft, unless a new message is
+        // being written right now (that one owns the draft slot).
+        if (!openRef.current) deleteDraft("compose").catch(() => {});
+      },
+      onError: () => onReopen({ ...snapshot, error: failure }),
+    });
   }
 
   function handleKeyDown(e: React.KeyboardEvent) {

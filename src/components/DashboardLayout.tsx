@@ -49,6 +49,7 @@ export default function DashboardLayout() {
             open={composeOpen}
             onClose={closeCompose}
             prefill={composePrefill}
+            onReopen={openCompose}
           />
 
           <Toaster />
@@ -67,6 +68,7 @@ export default function DashboardLayout() {
             open={composeOpen}
             onClose={closeCompose}
             prefill={composePrefill}
+            onReopen={openCompose}
           />
           <Toaster />
         </Suspense>

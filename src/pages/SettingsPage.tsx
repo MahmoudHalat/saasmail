@@ -8,12 +8,9 @@ import {
 import PageHeader, { PageContainer } from "@/components/PageHeader";
 import AppearanceSettings from "@/components/AppearanceSettings";
 import { useLocation } from "react-router-dom";
-import {
-  HIDE_SIGNATURES_EVENT,
-  HIDE_SIGNATURES_STORAGE_KEY,
-  readHideSignatures,
-  writeHideSignatures,
-} from "@/lib/signatures";
+import { Send } from "lucide-react";
+import { useCommonSettings } from "@/lib/default-layout-settings";
+import { UNDO_SEND_CHOICES } from "@/lib/undo-send";
 import { useSession } from "@/lib/auth-client";
 import { useBranding } from "@/lib/branding";
 
@@ -40,16 +37,75 @@ export default function SettingsPage() {
     <PageContainer>
       <PageHeader
         title="Settings"
-        subtitle="Manage notifications, display preferences, and (admin only) app branding."
+        subtitle="Appearance, sending, notifications and display preferences follow your account to every device. Admins also set the app branding."
       />
 
       <div className="max-w-3xl space-y-8">
         <AppearanceSettings />
+        <SendingSection />
         <NotificationsSection />
         <DisplayPreferencesSection />
         {isAdmin && <AppBrandingSection />}
       </div>
     </PageContainer>
+  );
+}
+
+/* ------------------------------------ Sending ------------------------------------- */
+
+function undoLabel(n: number) {
+  return n === 0 ? "Off" : `${n} s`;
+}
+
+/** Undo Send delay — shared by every mail layout and every send button. */
+function SendingSection() {
+  const [{ undoSendSeconds }, setCommon] = useCommonSettings();
+  return (
+    <section id="sending" className="scroll-mt-6 space-y-3">
+      <div>
+        <h2 className="text-base font-semibold tracking-[-0.01em] text-text-primary">
+          Sending
+        </h2>
+        <p className="mt-0.5 text-[13px] text-text-secondary">
+          Saved to your account, so it applies on every device and in every mail
+          layout.
+        </p>
+      </div>
+      <div className="rounded-2xl border border-border bg-card p-5 shadow-card">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between sm:gap-6">
+          <div className="min-w-0">
+            <h3 className="flex items-center gap-2 text-sm font-medium text-text-primary">
+              <Send size={14} className="text-text-secondary" aria-hidden />
+              Undo send
+            </h3>
+            <p className="mt-1 text-xs text-text-secondary">
+              After you press Send, the message waits this long with an Undo
+              button before it goes out. Undo reopens it with everything you
+              wrote. Keep this tab open until it has gone.
+            </p>
+          </div>
+          <div
+            className="pt-seg shrink-0 self-start"
+            role="radiogroup"
+            aria-label="Undo send delay"
+            data-testid="undo-send-delay"
+          >
+            {UNDO_SEND_CHOICES.map((n) => (
+              <button
+                key={n}
+                type="button"
+                role="radio"
+                aria-checked={undoSendSeconds === n}
+                aria-label={n === 0 ? "Off" : `${n} seconds`}
+                onClick={() => setCommon({ undoSendSeconds: n })}
+              >
+                {undoLabel(n)}
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
+    </section>
   );
 }
 
@@ -213,33 +269,11 @@ function NotificationsSection() {
 /* ------------------------------ 2. Display preferences ----------------------------- */
 
 function DisplayPreferencesSection() {
-  const [hideSignatures, setHideSignatures] = useState(() =>
-    readHideSignatures(),
-  );
-
-  // Stay in sync with other tabs (cross-tab) AND with the in-tab event the
-  // signatures lib dispatches.
-  useEffect(() => {
-    function onStorage(e: StorageEvent) {
-      if (e.key === HIDE_SIGNATURES_STORAGE_KEY) {
-        setHideSignatures(readHideSignatures());
-      }
-    }
-    function onCustom() {
-      setHideSignatures(readHideSignatures());
-    }
-    window.addEventListener("storage", onStorage);
-    window.addEventListener(HIDE_SIGNATURES_EVENT, onCustom);
-    return () => {
-      window.removeEventListener("storage", onStorage);
-      window.removeEventListener(HIDE_SIGNATURES_EVENT, onCustom);
-    };
-  }, []);
+  // Saved to the account (layoutSettings.common), so it follows the user.
+  const [{ hideSignatures }, setCommon] = useCommonSettings();
 
   function toggle() {
-    const next = !hideSignatures;
-    setHideSignatures(next);
-    writeHideSignatures(next);
+    setCommon({ hideSignatures: !hideSignatures });
   }
 
   return (

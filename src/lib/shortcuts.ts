@@ -33,6 +33,7 @@ export const SHORTCUT_GROUPS: ShortcutGroup[] = [
       { keys: ["b"], label: "Snooze…" },
       { keys: ["s"], label: "Star / unstar" },
       { keys: ["p"], label: "Pin / unpin" },
+      { keys: ["#"], label: "Move to Trash" },
       { keys: ["⇧", "I"], label: "Mark as read" },
       { keys: ["r"], label: "Reply" },
       { keys: ["x"], label: "Select" },

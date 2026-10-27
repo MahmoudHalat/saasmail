@@ -1,4 +1,5 @@
 import { showToast } from "@/lib/toast";
+import { serverErrorMessage } from "@/lib/error-message";
 
 /**
  * Gmail-style Undo Send: hold a send in the browser for a few seconds with
@@ -40,7 +41,8 @@ export function sendWithUndo(opts: {
     } catch (err) {
       showToast({
         kind: "error",
-        message: err instanceof Error ? err.message : "Message not sent",
+        message: "Message not sent",
+        description: serverErrorMessage(err) ?? undefined,
       });
       onError?.(err);
     }

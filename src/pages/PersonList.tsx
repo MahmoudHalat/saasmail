@@ -11,7 +11,6 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
-  deletePerson,
   type GroupedItem,
   type GroupedPerson,
   type GroupedConversation,
@@ -29,8 +28,8 @@ import { usePullToRefresh } from "@/hooks/usePullToRefresh";
 interface PersonListProps {
   /** Mixed list of person + group rows from /api/people/grouped. */
   items: GroupedItem[];
-  /** Replaces the items list (used for optimistic delete). */
-  setItems: (items: GroupedItem[]) => void;
+  /** @deprecated Unused: delete now goes through `mailActions`. */
+  setItems?: (items: GroupedItem[]) => void;
   loading: boolean;
   total: number;
   pageSize: number;
@@ -40,7 +39,9 @@ interface PersonListProps {
   selectedConversationId: string | null;
   onSelectPerson: (person: GroupedPerson) => void;
   onSelectConversation: (conv: GroupedConversation) => void;
+  /** @deprecated Unused: delete now goes through `mailActions`. */
   onPersonDeleted?: (personId: string) => void;
+  /** Admins get the `person-kebab-menu` test id on the row menu. */
   isAdmin?: boolean;
   selectedIds?: Set<string>;
   onToggleSelected?: (id: string) => void;
@@ -57,7 +58,10 @@ interface PersonListProps {
    * resizable sidebar dropping below COMPACT_THRESHOLD.
    */
   compact?: boolean;
-  /** Star / pin / archive / snooze handlers for a row (InboxPage). */
+  /**
+   * Star / pin / archive / snooze / trash handlers for a row (InboxPage).
+   * In Trash these are Restore and, for admins, Delete forever.
+   */
   mailActions?: (item: GroupedItem) => MailActionHandlers;
   /** Shown when the list is empty (depends on the folder). */
   emptyMessage?: string;
@@ -86,7 +90,6 @@ function formatTime(ts: number) {
 
 export default function PersonList({
   items,
-  setItems,
   loading,
   total,
   pageSize,
@@ -96,7 +99,6 @@ export default function PersonList({
   selectedConversationId,
   onSelectPerson,
   onSelectConversation,
-  onPersonDeleted,
   isAdmin,
   selectedIds,
   onToggleSelected,
@@ -118,20 +120,6 @@ export default function PersonList({
   const pullActive = pullDistance > 0 || refreshing;
 
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
-
-  async function handleDeletePerson(person: GroupedPerson) {
-    if (
-      !confirm(
-        `Permanently delete ${person.name || person.email} and all ${person.totalCount} email${person.totalCount !== 1 ? "s" : ""}? This cannot be undone.`,
-      )
-    )
-      return;
-    await deletePerson(person.id);
-    setItems(
-      items.filter((it) => !(it.type === "person" && it.id === person.id)),
-    );
-    onPersonDeleted?.(person.id);
-  }
 
   // Quick predicates for the union mapping below.
   const persons = items.filter(
@@ -237,9 +225,6 @@ export default function PersonList({
                 const unread = person.unreadCount > 0;
                 const handlers: MailActionHandlers = {
                   ...(mailActions?.(person) ?? {}),
-                  ...(isAdmin
-                    ? { onDelete: () => handleDeletePerson(person) }
-                    : {}),
                   ...(unread && onMarkPersonRead
                     ? { onMarkRead: () => onMarkPersonRead(person.id) }
                     : {}),

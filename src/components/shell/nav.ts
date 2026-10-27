@@ -12,6 +12,7 @@ import {
   ShieldBan,
   Star,
   Timer,
+  Trash2,
   Users,
   Workflow,
   type LucideIcon,
@@ -55,6 +56,12 @@ export const MAIL_VIEWS: MailView[] = [
     icon: Archive,
     params: { folder: "archive" },
   },
+  {
+    id: "trash",
+    label: "Trash",
+    icon: Trash2,
+    params: { folder: "trash" },
+  },
 ];
 
 export const FOLDERS: MailFolder[] = [
@@ -63,6 +70,7 @@ export const FOLDERS: MailFolder[] = [
   "snoozed",
   "archive",
   "sent",
+  "trash",
 ];
 
 /** Parse the mail folder from the URL; anything unknown means inbox. */

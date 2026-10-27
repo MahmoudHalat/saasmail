@@ -6,6 +6,8 @@ import {
   Loader2,
   ShieldBan,
   Star,
+  Trash2,
+  Undo2,
   X,
 } from "lucide-react";
 import {
@@ -30,6 +32,20 @@ interface SelectionBarProps {
   archiveLabel?: string;
   /** Bulk snooze until a unix-seconds time. */
   onSnooze?: (until: number | null) => void;
+  /** Move to Trash (with Undo). */
+  onTrash?: () => void;
+  /** Restore from Trash. */
+  onRestore?: () => void;
+  /** Delete forever (asks first). Admins, in Trash. */
+  onDeleteForever?: () => void;
+  /**
+   * Gmail's "Select all N conversations": shown when every row on the page
+   * is selected and more match. `allMatching` means the selection is the
+   * whole folder + filters, not just the checked rows.
+   */
+  matchingTotal?: number;
+  allMatching?: boolean;
+  onSelectAllMatching?: () => void;
   className?: string;
 }
 
@@ -50,9 +66,16 @@ export default function SelectionBar({
   onArchive,
   archiveLabel = "Archive",
   onSnooze,
+  onTrash,
+  onRestore,
+  onDeleteForever,
+  matchingTotal,
+  allMatching,
+  onSelectAllMatching,
   className,
 }: SelectionBarProps) {
   if (count === 0) return null;
+  const shown = allMatching && matchingTotal ? matchingTotal : count;
   return (
     <div
       data-testid="selection-bar"
@@ -62,9 +85,24 @@ export default function SelectionBar({
       )}
     >
       <span className="tabular mr-1 inline-flex h-6 min-w-6 items-center justify-center rounded-full bg-accent px-2 text-xs font-semibold text-accent-foreground">
-        {count}
+        {shown.toLocaleString()}
       </span>
-      <span className="mr-1 shrink-0 text-[13px] font-medium">selected</span>
+      <span className="mr-1 shrink-0 text-[13px] font-medium">
+        {allMatching ? "selected (all)" : "selected"}
+      </span>
+      {onSelectAllMatching &&
+        !allMatching &&
+        matchingTotal != null &&
+        matchingTotal > count && (
+          <button
+            type="button"
+            onClick={onSelectAllMatching}
+            data-testid="select-all-matching"
+            className="mr-1 shrink-0 rounded-md px-1.5 text-[13px] font-medium text-accent-subtle-fg underline-offset-2 hover:underline"
+          >
+            Select all {matchingTotal.toLocaleString()}
+          </button>
+        )}
 
       <span className="mx-1 h-5 w-px shrink-0 bg-border" aria-hidden />
 
@@ -105,10 +143,51 @@ export default function SelectionBar({
         </DropdownMenu>
       )}
 
+      {onRestore && (
+        <button
+          type="button"
+          onClick={onRestore}
+          disabled={busy}
+          className={btn}
+        >
+          <Undo2 />
+          <span className="hidden sm:inline">Restore</span>
+        </button>
+      )}
+
       {onStar && (
         <button type="button" onClick={onStar} disabled={busy} className={btn}>
           <Star />
           <span className="hidden sm:inline">Star</span>
+        </button>
+      )}
+
+      {onTrash && (
+        <button
+          type="button"
+          onClick={onTrash}
+          disabled={busy}
+          className={btn}
+          title="Move to Trash (#)"
+          data-testid="selection-trash"
+        >
+          <Trash2 />
+          <span className="hidden sm:inline">Trash</span>
+        </button>
+      )}
+
+      {onDeleteForever && (
+        <button
+          type="button"
+          onClick={onDeleteForever}
+          disabled={busy}
+          className={cn(
+            btn,
+            "hover:bg-destructive-subtle hover:text-destructive",
+          )}
+        >
+          <Trash2 />
+          <span className="hidden sm:inline">Delete forever</span>
         </button>
       )}
 

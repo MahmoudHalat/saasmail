@@ -232,7 +232,7 @@ const GroupedQuerySchema = z.object({
     .default("all")
     .openapi({
       description:
-        "Mail folder, from the signed-in user's star/archive/snooze/trash state. `all` (default) ignores that state; `inbox` hides archived, snoozed and trashed rows and puts pinned rows first; `sent` keeps rows we have written to; every folder except `all` and `trash` hides trashed rows.",
+        "Mail folder, from the signed-in user's star/archive/snooze/trash state. `all` (default) ignores that state; `inbox` hides archived, snoozed and trashed rows and puts pinned rows first; `sent` keeps rows we have written to; every folder except `trash` (including `all`) hides the caller's trashed rows.",
     }),
   sort: z
     .enum(["recency", "unread", "inbox", "attachments"])
@@ -754,9 +754,8 @@ async function computeGroupedRows(
       r.type === "person" ? personHits.has(r.id) : convHits.has(r.id),
     );
   }
-  // Trash hides a row everywhere except the Trash folder (and "all").
-  if (folder !== "all" && folder !== "trash")
-    merged = merged.filter((r) => !r.trashedAt);
+  // Trash hides a row everywhere except the Trash folder.
+  if (folder !== "trash") merged = merged.filter((r) => !r.trashedAt);
 
   switch (folder) {
     case "inbox":

@@ -29,6 +29,9 @@ import {
   type CcEntry,
 } from "@/lib/api";
 import { dispatchEmailSent } from "@/lib/email-events";
+import { sendWithUndo } from "@/lib/undo-send";
+import { useCommonSettings } from "@/lib/default-layout-settings";
+import { showToast } from "@/lib/toast";
 import { serverErrorMessage } from "@/lib/error-message";
 import { useDraftAutosave } from "@/lib/use-draft-autosave";
 import { getFromLabel } from "@/lib/format";
@@ -88,6 +91,18 @@ export default function ReplyComposer({
   const totalAttachmentBytes = files.reduce((s, f) => s + f.size, 0);
   // Compact tray vs. full-viewport. Toggled by the maximize button.
   const [fullscreen, setFullscreen] = useState(false);
+  // Undo Send: while a send is held (or in flight) the tray is hidden but
+  // stays mounted, so Undo or a failure brings it back exactly as it was.
+  const [held, setHeld] = useState(false);
+  const [undoneOnce, setUndoneOnce] = useState(false);
+  const [{ undoSendSeconds }] = useCommonSettings();
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
 
   // Set once a saved reply draft has been restored, so the reply-all CC
   // default below yields to the draft's own CC regardless of which async
@@ -99,9 +114,13 @@ export default function ReplyComposer({
   const bodyIsEmpty = !bodyHtml || bodyHtml === "<p></p>";
   const { clear: clearDraft } = useDraftAutosave({
     contextKey: `reply:${emailId}`,
-    enabled: true,
+    // Hiding the tray for Undo Send flushes the draft to the server, so it
+    // survives until the send really goes out.
+    enabled: !held,
     isEmpty: bodyIsEmpty,
-    restore: true,
+    // After an Undo the tray already holds the content; don't let an older
+    // copy of the draft overwrite it.
+    restore: !undoneOnce,
     values: { fromAddress, cc, bodyHtml, bodyText, replyToEmailId: emailId },
     onRestore: (draft) => {
       draftRestoredRef.current = true;
@@ -248,65 +267,88 @@ export default function ReplyComposer({
       .finally(() => setTemplatesLoading(false));
   }, [tab, templates.length]);
 
-  async function handleSend() {
-    setSending(true);
+  function handleSend() {
+    if (sending || held) return;
+    if (tab === "template" && !selectedSlug) {
+      setError("Select a template");
+      return;
+    }
     setError("");
     const ccPayload = cc.length > 0 ? cc : undefined;
-    try {
-      if (tab === "freeform") {
-        // Wrap the signature in a marker div so the chat-feed "hide
-        // signatures" toggle can strip it cleanly. Skip when the inbox has
-        // none configured. Templates already include their own boilerplate
-        // so we don't append.
-        const finalBody = safeSignatureHtml
-          ? `${bodyHtml}<div data-signature>${safeSignatureHtml}</div>`
-          : bodyHtml;
-        await replyToEmail(emailId, {
-          bodyHtml: finalBody,
-          ...(bodyText.trim() ? { bodyText } : {}),
-          fromAddress,
-          ...(ccPayload ? { cc: ccPayload } : {}),
-          ...(files.length > 0
-            ? { files: files.map((file) => ({ file })) }
-            : {}),
-        });
-      } else {
-        if (!selectedSlug) {
-          setError("Select a template");
+    const filesPayload =
+      files.length > 0 ? { files: files.map((file) => ({ file })) } : {};
+    // Wrap the signature in a marker div so the chat-feed "hide
+    // signatures" toggle can strip it cleanly. Skip when the inbox has
+    // none configured. Templates already include their own boilerplate
+    // so we don't append.
+    const payload =
+      tab === "freeform"
+        ? {
+            bodyHtml: safeSignatureHtml
+              ? `${bodyHtml}<div data-signature>${safeSignatureHtml}</div>`
+              : bodyHtml,
+            ...(bodyText.trim() ? { bodyText } : {}),
+            fromAddress,
+            ...(ccPayload ? { cc: ccPayload } : {}),
+            ...filesPayload,
+          }
+        : {
+            templateSlug: selectedSlug,
+            variables: templateVars,
+            fromAddress,
+            ...(ccPayload ? { cc: ccPayload } : {}),
+            ...filesPayload,
+          };
+    const from = fromAddress;
+
+    setHeld(true);
+    setSending(true);
+    sendWithUndo({
+      seconds: undoSendSeconds,
+      label: "Sending reply…",
+      send: () => replyToEmail(emailId, payload).then(() => undefined),
+      onUndo: () => {
+        if (mountedRef.current) {
+          setUndoneOnce(true);
           setSending(false);
-          return;
+          setHeld(false);
+        } else {
+          // The conversation was closed meanwhile; the draft is saved.
+          showToast({
+            kind: "info",
+            message: "Reply not sent",
+            description:
+              "It's saved as a draft. Open Reply on the message to finish it.",
+          });
         }
-        await replyToEmail(emailId, {
-          templateSlug: selectedSlug,
-          variables: templateVars,
-          fromAddress,
-          ...(ccPayload ? { cc: ccPayload } : {}),
-          ...(files.length > 0
-            ? { files: files.map((file) => ({ file })) }
-            : {}),
+      },
+      onSent: () => {
+        // The reply went out — discard its draft so it doesn't reappear.
+        clearDraft();
+        // Notify the rest of the app — PersonDetail uses this to
+        // auto-switch the active inbox tab when the user replied from a
+        // different inbox than the one they were viewing.
+        dispatchEmailSent({
+          fromAddress: from,
+          to: personEmail,
+          origin: "reply",
         });
-      }
-      setFiles([]);
-      // The reply went out — discard its draft so it doesn't reappear.
-      clearDraft();
-      // Notify the rest of the app — PersonDetail uses this to
-      // auto-switch the active inbox tab when the user replied from a
-      // different inbox than the one they were viewing.
-      dispatchEmailSent({
-        fromAddress,
-        to: personEmail,
-        origin: "reply",
-      });
-      onSent();
-      onClose();
-    } catch (e) {
-      // The server's own words when it has any: a Gmail reply it refused was
-      // *not* queued, so the user has to send it again — a generic "failed"
-      // would leave them waiting for a retry that isn't coming.
-      setError(serverErrorMessage(e) ?? "Failed to send reply");
-    } finally {
-      setSending(false);
-    }
+        if (!mountedRef.current) return;
+        setFiles([]);
+        setSending(false);
+        onSent();
+        onClose();
+      },
+      onError: (e) => {
+        if (!mountedRef.current) return;
+        setSending(false);
+        setHeld(false);
+        // The server's own words when it has any: a Gmail reply it refused
+        // was *not* queued, so the user has to send it again — a generic
+        // "failed" would leave them waiting for a retry that isn't coming.
+        setError(serverErrorMessage(e) ?? "Failed to send reply");
+      },
+    });
   }
 
   function handleKeyDown(e: React.KeyboardEvent) {
@@ -319,6 +361,9 @@ export default function ReplyComposer({
   const recipientLabel = personName
     ? `${personName} <${personEmail}>`
     : personEmail;
+
+  // Held for Undo Send: hidden, but kept mounted with all its content.
+  if (held) return null;
 
   return (
     // Non-modal tray (Gmail-style): page behind stays interactive, only

@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { useParams, useOutletContext, useSearchParams } from "react-router-dom";
-import { Mail } from "lucide-react";
+import { Loader2, Mail, Trash2 } from "lucide-react";
 
 import type { ComposePrefill } from "@/pages/ComposeModal";
 
@@ -19,22 +19,34 @@ import AgentPlan from "@/components/AgentPlan";
 import {
   addBlock,
   EMPTY_MAIL_ROW_STATE,
-  defaultDirectionFor,
+  deletePerson,
   fetchPerson,
   fetchStats,
   fetchGroupedPeople,
   markPeopleRead,
   markConversationsRead,
+  setCategoryOverride,
   updateMailState,
   type GroupedItem,
+  type MailCategory,
   type MailFolder,
+  type MailItemRef,
   type GroupedPerson,
   type GroupedConversation,
   type InboxAggregates,
-  type InboxSort,
   type InboxSortSpec,
   type Stats,
 } from "@/lib/api";
+import {
+  applyToFolder,
+  applyToRefs,
+  deleteFolderForever,
+  markFolderRead,
+} from "@/lib/folder-actions";
+import {
+  parseInboxSort,
+  useDefaultLayoutSettings,
+} from "@/lib/default-layout-settings";
 import ConversationDetail from "./ConversationDetail";
 import { useSession } from "@/lib/auth-client";
 import { useRealtimeUpdates } from "@/hooks/useRealtimeUpdates";
@@ -45,9 +57,10 @@ import { PushOptInBanner } from "@/components/PushOptInBanner";
 import { isPushSupported, hasDismissedPrompt } from "@/lib/push";
 import { showToast } from "@/lib/toast";
 import { itemRef } from "@/hooks/useMailList";
-import type {
-  MailActionHandlers,
-  MailStateLike,
+import {
+  CATEGORY_LABELS,
+  type MailActionHandlers,
+  type MailStateLike,
 } from "@/components/MailActions";
 import {
   MAIL_VIEWS,
@@ -113,6 +126,7 @@ type StatePatch = {
   pinned?: boolean;
   archived?: boolean;
   snoozedUntil?: number | null;
+  trashed?: boolean;
 };
 
 const FOLDER_EMPTY: Record<string, string> = {
@@ -123,11 +137,14 @@ const FOLDER_EMPTY: Record<string, string> = {
   sent: "Nothing sent yet",
   drafts: "No drafts in progress",
   sequenced: "Nobody is in a sequence",
+  trash: "Trash is empty",
 };
 
 const PEOPLE_PAGE_SIZE = 40;
 
 export default function InboxPage() {
+  const { data: session } = useSession();
+  const isAdmin = session?.user?.role === "admin";
   const outlet = useOutletContext<InboxOutletContext | null>();
   const onCompose = outlet?.onCompose ?? (() => {});
   const [selectedPerson, setSelectedPerson] = useState<GroupedPerson | null>(
@@ -197,18 +214,21 @@ export default function InboxPage() {
   const queryFolder: MailFolder =
     draftsParam || sequencedParam ? "all" : folder;
   const [unreadOnly, setUnreadOnly] = useState(false);
+  const [category, setCategory] = useState<MailCategory | undefined>();
   const filters: InboxFilters = useMemo(
     () => ({
       recipient: recipientParam,
       unread: unreadOnly,
       drafts: draftsParam,
       sequenced: sequencedParam,
+      category,
     }),
-    [recipientParam, unreadOnly, draftsParam, sequencedParam],
+    [recipientParam, unreadOnly, draftsParam, sequencedParam, category],
   );
   const setFilters = useCallback(
     (next: InboxFilters) => {
       setUnreadOnly(!!next.unread);
+      setCategory(next.category);
       setSearchParams(
         (prev) => {
           const sp = new URLSearchParams(prev);
@@ -229,48 +249,18 @@ export default function InboxPage() {
     () => searchParams.get("q") ?? searchParams.get("search") ?? "",
   );
   const [view, setView] = useState<InboxView>("list");
-  const [sortSpec, setSortSpec] = useState<InboxSortSpec>(() => {
-    // Persisted as JSON now ({key, direction}). For back-compat, also
-    // accept the legacy plain-string key form so users with an older
-    // saved value don't bounce back to "recency" on first load.
-    if (typeof window === "undefined")
-      return { key: "recency", direction: "desc" };
-    const saved = window.localStorage?.getItem("saasmail.inboxSort");
-    if (!saved) return { key: "recency", direction: "desc" };
-    try {
-      const parsed = JSON.parse(saved);
-      if (
-        parsed &&
-        (parsed.key === "recency" ||
-          parsed.key === "unread" ||
-          parsed.key === "inbox" ||
-          parsed.key === "attachments") &&
-        (parsed.direction === "asc" || parsed.direction === "desc")
-      ) {
-        return parsed as InboxSortSpec;
-      }
-    } catch {
-      /* fallthrough — treat as legacy bare-key string */
-    }
-    if (
-      saved === "recency" ||
-      saved === "unread" ||
-      saved === "inbox" ||
-      saved === "attachments"
-    ) {
-      return { key: saved as InboxSort, direction: defaultDirectionFor(saved) };
-    }
-    return { key: "recency", direction: "desc" };
-  });
-
-  // Persist sort across reloads.
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    window.localStorage?.setItem(
-      "saasmail.inboxSort",
-      JSON.stringify(sortSpec),
-    );
-  }, [sortSpec]);
+  // Sort is an account setting (follows the user to other devices).
+  const [layoutSettings, setLayoutSettings] = useDefaultLayoutSettings();
+  const savedSort = parseInboxSort(layoutSettings.inboxSort);
+  const sortSpec: InboxSortSpec = useMemo(
+    () => savedSort ?? { key: "recency", direction: "desc" },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [savedSort?.key, savedSort?.direction],
+  );
+  const setSortSpec = useCallback(
+    (spec: InboxSortSpec) => setLayoutSettings({ inboxSort: spec }),
+    [setLayoutSettings],
+  );
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [selectedConversationIds, setSelectedConversationIds] = useState<
     Set<string>
@@ -307,6 +297,7 @@ export default function InboxPage() {
     filters.unread,
     filters.drafts,
     filters.sequenced,
+    filters.category,
     queryFolder,
     sortSpec.key,
   ]);
@@ -320,18 +311,17 @@ export default function InboxPage() {
   // The current people query, derived from search + filters + sort + page.
   // Shared by the debounced auto-load below and the manual refresh path so
   // both always hit the same parameters.
-  const peopleQuery = useMemo(
+  // What "the whole folder" means for folder-wide actions (mark all read,
+  // "Select all N", Empty Trash): the folder plus every active filter.
+  const folderQuery = useMemo(
     () => ({
       q: search || undefined,
       recipient: filters.recipient,
       unread: filters.unread,
       drafts: filters.drafts,
       sequenced: filters.sequenced,
+      category: filters.category,
       folder: queryFolder,
-      sort: sortSpec.key,
-      direction: sortSpec.direction,
-      page: peoplePage,
-      limit: PEOPLE_PAGE_SIZE,
     }),
     [
       search,
@@ -339,12 +329,23 @@ export default function InboxPage() {
       filters.unread,
       filters.drafts,
       filters.sequenced,
+      filters.category,
       queryFolder,
-      sortSpec.key,
-      sortSpec.direction,
-      peoplePage,
     ],
   );
+  const peopleQuery = useMemo(
+    () => ({
+      ...folderQuery,
+      sort: sortSpec.key,
+      direction: sortSpec.direction,
+      page: peoplePage,
+      limit: PEOPLE_PAGE_SIZE,
+    }),
+    [folderQuery, sortSpec.key, sortSpec.direction, peoplePage],
+  );
+  // "Select all N": the selection is every row matching folderQuery.
+  const [allMatching, setAllMatching] = useState(false);
+  useEffect(() => setAllMatching(false), [folderQuery]);
 
   // Fetch the people list at the InboxPage level so both Table view
   // (PeopleTable) and List view (PersonList sidebar) see the same data.
@@ -442,6 +443,7 @@ export default function InboxPage() {
   const clearSelection = useCallback(() => {
     setSelectedIds(new Set());
     setSelectedConversationIds(new Set());
+    setAllMatching(false);
   }, []);
 
   // Optimistic mark-read: clear unread locally on the matching rows,
@@ -488,6 +490,11 @@ export default function InboxPage() {
 
   /** Does a row still belong in the current folder after this change? */
   function stillBelongs(it: GroupedItem, patch: StatePatch): boolean {
+    const trashed =
+      patch.trashed !== undefined ? patch.trashed : !!it.trashedAt;
+    // Trash hides a row from every view but Trash itself.
+    if (queryFolder === "trash") return trashed;
+    if (trashed) return false;
     if (queryFolder === "all" || queryFolder === "sent") return true;
     const archived =
       patch.archived !== undefined ? patch.archived : !!it.archivedAt;
@@ -522,6 +529,9 @@ export default function InboxPage() {
           : {}),
         ...(patch.snoozedUntil !== undefined
           ? { snoozedUntil: patch.snoozedUntil }
+          : {}),
+        ...(patch.trashed !== undefined
+          ? { trashedAt: patch.trashed ? nowSec : null }
           : {}),
       });
       const removed = targets.filter((t) => !stillBelongs(t, patch));
@@ -630,52 +640,200 @@ export default function InboxPage() {
   const plural = (n: number, one: string) =>
     n === 1 ? `${one}` : `${n} conversations`;
 
-  const mailActionsFor = useCallback(
-    (it: GroupedItem): MailActionHandlers => ({
-      onToggleStar: () =>
-        changeMailState(
-          [it],
-          { starred: !it.starred },
-          { undo: { starred: it.starred } },
+  /** Move rows to Trash (hidden everywhere else), with Undo. */
+  function trashMany(list: GroupedItem[]) {
+    if (list.length === 0) return;
+    changeMailState(
+      list,
+      { trashed: true },
+      {
+        message:
+          list.length === 1
+            ? "Moved to Trash"
+            : `${list.length} conversations moved to Trash`,
+        undo: { trashed: false },
+      },
+    );
+    clearSelection();
+  }
+
+  function restoreMany(list: GroupedItem[]) {
+    if (list.length === 0) return;
+    changeMailState(
+      list,
+      { trashed: false },
+      {
+        message:
+          list.length === 1
+            ? "Restored from Trash"
+            : `${list.length} conversations restored`,
+        undo: { trashed: true },
+      },
+    );
+    clearSelection();
+  }
+
+  /**
+   * Delete forever: people only (a group conversation can't be
+   * hard-deleted). Removes the person and all their mail for everyone, so
+   * it asks first. Admins only; offered only inside Trash.
+   */
+  async function deleteForever(list: GroupedItem[]) {
+    const people = list.filter(
+      (it): it is GroupedPerson => it.type === "person",
+    );
+    const groups = list.length - people.length;
+    if (people.length === 0) {
+      showToast({
+        kind: "info",
+        message: "Group conversations can't be deleted forever",
+        description: "Restore them, or leave them in Trash.",
+      });
+      return;
+    }
+    const who =
+      people.length === 1
+        ? `${people[0].name || people[0].email} and all ${people[0].totalCount} email${people[0].totalCount !== 1 ? "s" : ""}`
+        : `${people.length} people and all their emails`;
+    if (
+      !confirm(
+        `Delete ${who} forever? This removes them for everyone on this workspace and cannot be undone.${groups > 0 ? ` ${groups} group conversation${groups !== 1 ? "s" : ""} in the selection will stay in Trash.` : ""}`,
+      )
+    )
+      return;
+    setBulkBusy(true);
+    const gone = new Set<string>();
+    try {
+      for (const p of people) {
+        try {
+          await deletePerson(p.id);
+          gone.add(p.id);
+        } catch {
+          /* counted below */
+        }
+      }
+    } finally {
+      setBulkBusy(false);
+    }
+    setItems((prev) =>
+      prev.filter((it) => !(it.type === "person" && gone.has(it.id))),
+    );
+    setPeopleTotal((t) => Math.max(0, t - gone.size));
+    if (selectedPerson && gone.has(selectedPerson.id)) setSelectedPerson(null);
+    clearSelection();
+    refreshMailCounts();
+    const failed = people.length - gone.size;
+    showToast({
+      kind: failed > 0 ? "error" : "success",
+      message:
+        gone.size === 1
+          ? "Deleted forever"
+          : `${gone.size} people deleted forever`,
+      description:
+        failed > 0
+          ? `${failed} couldn't be deleted. Try again.`
+          : groups > 0
+            ? "Group conversations can't be deleted forever; they stay in Trash."
+            : undefined,
+    });
+  }
+
+  /** "Move to Primary / Promotions / …": a per-user correction by sender. */
+  async function moveToCategory(it: GroupedPerson, to: MailCategory) {
+    const sender = it.email.toLowerCase();
+    try {
+      await setCategoryOverride([sender], to);
+      setItems((prev) =>
+        prev.map((x) =>
+          x.type === "person" && x.email.toLowerCase() === sender
+            ? { ...x, category: to }
+            : x,
         ),
-      onTogglePin: () =>
-        changeMailState(
-          [it],
-          { pinned: !it.pinned },
-          { undo: { pinned: it.pinned } },
-        ),
-      onArchive: () =>
-        it.archivedAt
-          ? changeMailState(
+      );
+      if (filters.category && filters.category !== to) refreshPeople();
+      showToast({
+        kind: "success",
+        message: `${it.name || it.email} now goes to ${CATEGORY_LABELS[to]}`,
+        description: "Applies to all their mail, for you only.",
+        action: {
+          label: "Undo",
+          onClick: (dismiss) => {
+            dismiss();
+            setCategoryOverride([sender], null)
+              .then(() => refreshPeople())
+              .catch(() =>
+                showToast({ kind: "error", message: "Couldn't undo" }),
+              );
+          },
+        },
+      });
+    } catch {
+      showToast({ kind: "error", message: "Couldn't move this sender" });
+    }
+  }
+
+  const inTrash = queryFolder === "trash";
+  const mailActionsFor = (it: GroupedItem): MailActionHandlers =>
+    inTrash
+      ? {
+          onRestore: () => restoreMany([it]),
+          onToggleStar: () =>
+            changeMailState(
               [it],
-              { archived: false },
-              {
-                message: "Moved to inbox",
-                undo: { archived: true },
-              },
-            )
-          : changeMailState(
-              [it],
-              { archived: true },
-              {
-                message: "Conversation archived",
-                undo: { archived: false },
-              },
+              { starred: !it.starred },
+              { undo: { starred: it.starred } },
             ),
-      onSnooze: (until) =>
-        changeMailState(
-          [it],
-          { snoozedUntil: until },
-          until
-            ? {
-                message: `Snoozed until ${new Date(until * 1000).toLocaleString([], { weekday: "short", hour: "numeric", minute: "2-digit" })}`,
-                undo: { snoozedUntil: it.snoozedUntil ?? null },
-              }
-            : { message: "Back in your inbox" },
-        ),
-    }),
-    [changeMailState],
-  );
+          ...(isAdmin && it.type === "person"
+            ? { onDelete: () => deleteForever([it]) }
+            : {}),
+        }
+      : {
+          onToggleStar: () =>
+            changeMailState(
+              [it],
+              { starred: !it.starred },
+              { undo: { starred: it.starred } },
+            ),
+          onTogglePin: () =>
+            changeMailState(
+              [it],
+              { pinned: !it.pinned },
+              { undo: { pinned: it.pinned } },
+            ),
+          onArchive: () =>
+            it.archivedAt
+              ? changeMailState(
+                  [it],
+                  { archived: false },
+                  {
+                    message: "Moved to inbox",
+                    undo: { archived: true },
+                  },
+                )
+              : changeMailState(
+                  [it],
+                  { archived: true },
+                  {
+                    message: "Conversation archived",
+                    undo: { archived: false },
+                  },
+                ),
+          onSnooze: (until) =>
+            changeMailState(
+              [it],
+              { snoozedUntil: until },
+              until
+                ? {
+                    message: `Snoozed until ${new Date(until * 1000).toLocaleString([], { weekday: "short", hour: "numeric", minute: "2-digit" })}`,
+                    undo: { snoozedUntil: it.snoozedUntil ?? null },
+                  }
+                : { message: "Back in your inbox" },
+            ),
+          onTrash: () => trashMany([it]),
+          ...(it.type === "person"
+            ? { onMoveToCategory: (c: MailCategory) => moveToCategory(it, c) }
+            : {}),
+        };
 
   const selectedItems = useMemo(
     () =>
@@ -687,8 +845,188 @@ export default function InboxPage() {
     [items, selectedIds, selectedConversationIds],
   );
 
+  /**
+   * "Select all N" is on: apply the change to every row matching the
+   * folder + filters on the server, then refetch. Returns false when the
+   * selection is just the checked rows.
+   */
+  function applyToAllMatching(
+    patch: StatePatch,
+    opts: { message: (n: number) => string; undo?: StatePatch },
+  ): boolean {
+    if (!allMatching) return false;
+    setBulkBusy(true);
+    applyToFolder(folderQuery, patch)
+      .then((refs: MailItemRef[]) => {
+        clearSelection();
+        refreshPeople();
+        refreshMailCounts();
+        const undo = opts.undo;
+        const runUndo = undo
+          ? () => {
+              lastUndoRef.current = null;
+              applyToRefs(refs, undo)
+                .then(() => {
+                  refreshPeople();
+                  refreshMailCounts();
+                })
+                .catch(() =>
+                  showToast({ kind: "error", message: "Couldn't undo" }),
+                );
+            }
+          : null;
+        lastUndoRef.current = runUndo;
+        showToast({
+          kind: "success",
+          message: opts.message(refs.length),
+          action: runUndo
+            ? {
+                label: "Undo",
+                onClick: (dismiss) => {
+                  dismiss();
+                  runUndo();
+                },
+              }
+            : undefined,
+        });
+      })
+      .catch(() =>
+        showToast({
+          kind: "error",
+          message: "Couldn't update the conversations",
+          description: "Check your connection and try again.",
+        }),
+      )
+      .finally(() => setBulkBusy(false));
+    return true;
+  }
+
   function handleBulkArchive() {
+    const unarchive = folder === "archive";
+    if (
+      applyToAllMatching(
+        { archived: !unarchive },
+        {
+          message: (n) =>
+            `${plural(n, "Conversation")} ${unarchive ? "moved to inbox" : "archived"}`,
+          undo: { archived: unarchive },
+        },
+      )
+    )
+      return;
     archiveMany(selectedItems);
+  }
+
+  function handleBulkTrash() {
+    if (
+      applyToAllMatching(
+        { trashed: true },
+        {
+          message: (n) => `${plural(n, "Conversation")} moved to Trash`,
+          undo: { trashed: false },
+        },
+      )
+    )
+      return;
+    trashMany(selectedItems);
+  }
+
+  function handleBulkRestore() {
+    if (
+      applyToAllMatching(
+        { trashed: false },
+        {
+          message: (n) => `${plural(n, "Conversation")} restored`,
+          undo: { trashed: true },
+        },
+      )
+    )
+      return;
+    restoreMany(selectedItems);
+  }
+
+  function handleBulkDeleteForever() {
+    if (allMatching) void emptyTrash(folderQuery);
+    else void deleteForever(selectedItems);
+  }
+
+  // ── Whole-folder actions ─────────────────────────────────────────────
+  const [markingAll, setMarkingAll] = useState(false);
+
+  /** "Mark all as read": every unread row in this folder + filters. */
+  async function handleMarkFolderRead() {
+    const n = aggregates.unreadRowCount;
+    if (n === 0) return;
+    if (
+      n > PEOPLE_PAGE_SIZE &&
+      !confirm(
+        `Mark all ${n.toLocaleString()} unread conversations in ${viewLabel} as read?`,
+      )
+    )
+      return;
+    setMarkingAll(true);
+    try {
+      const done = await markFolderRead(folderQuery);
+      setItems((prev) => prev.map((it) => ({ ...it, unreadCount: 0 })));
+      refreshPeople();
+      refreshMailCounts();
+      incrementRefreshKey();
+      showToast({
+        kind: "success",
+        message:
+          done === 1
+            ? "1 conversation marked as read"
+            : `${done.toLocaleString()} conversations marked as read`,
+      });
+    } catch {
+      showToast({ kind: "error", message: "Couldn't mark as read" });
+    } finally {
+      setMarkingAll(false);
+    }
+  }
+
+  /**
+   * Empty Trash (or "Delete forever" on "Select all N" in Trash): delete
+   * every person in Trash forever. Group conversations can't be
+   * hard-deleted, so they stay (restore-only) and the toast says so.
+   */
+  async function emptyTrash(
+    query: Parameters<typeof deleteFolderForever>[0] = { folder: "trash" },
+  ) {
+    if (
+      !confirm(
+        "Delete every person in Trash forever? This removes them and all their mail for everyone on this workspace, and cannot be undone. Group conversations can't be deleted forever; they stay in Trash.",
+      )
+    )
+      return;
+    setBulkBusy(true);
+    try {
+      const res = await deleteFolderForever(query, deletePerson);
+      setSelectedPerson(null);
+      setSelectedConversation(null);
+      clearSelection();
+      await refreshPeople();
+      refreshMailCounts();
+      const notes: string[] = [];
+      if (res.failed > 0) notes.push(`${res.failed} couldn't be deleted.`);
+      if (res.skippedGroups > 0)
+        notes.push(
+          `${res.skippedGroups} group conversation${res.skippedGroups !== 1 ? "s" : ""} can't be deleted forever and stay${res.skippedGroups === 1 ? "s" : ""} in Trash.`,
+        );
+      showToast({
+        kind: res.failed > 0 ? "error" : "success",
+        message:
+          res.deleted === 1
+            ? "1 person deleted forever"
+            : `${res.deleted.toLocaleString()} people deleted forever`,
+        description: notes.join(" ") || undefined,
+        durationMs: notes.length ? 7000 : undefined,
+      });
+    } catch {
+      showToast({ kind: "error", message: "Couldn't empty Trash" });
+    } finally {
+      setBulkBusy(false);
+    }
   }
 
   function archiveMany(list: GroupedItem[]) {
@@ -716,6 +1054,19 @@ export default function InboxPage() {
   }
 
   function handleBulkSnooze(until: number | null) {
+    if (
+      applyToAllMatching(
+        { snoozedUntil: until },
+        {
+          message: (n) =>
+            until
+              ? `${plural(n, "Conversation")} snoozed`
+              : `${plural(n, "Conversation")} back in your inbox`,
+          undo: until ? { snoozedUntil: null } : undefined,
+        },
+      )
+    )
+      return;
     snoozeMany(selectedItems, until);
   }
 
@@ -735,6 +1086,16 @@ export default function InboxPage() {
   }
 
   function handleBulkStar() {
+    if (
+      applyToAllMatching(
+        { starred: true },
+        {
+          message: (n) => `${plural(n, "Conversation")} starred`,
+          undo: { starred: false },
+        },
+      )
+    )
+      return;
     const allStarred = selectedItems.every((it) => it.starred);
     changeMailState(selectedItems, { starred: !allStarred });
     clearSelection();
@@ -749,6 +1110,10 @@ export default function InboxPage() {
   }
 
   function handleBulkMarkRead() {
+    if (allMatching) {
+      void handleMarkFolderRead().then(clearSelection);
+      return;
+    }
     applyMarkRead(Array.from(selectedIds), Array.from(selectedConversationIds));
     clearSelection();
   }
@@ -767,7 +1132,6 @@ export default function InboxPage() {
 
   const [refreshKey, setRefreshKey] = useState(0);
   const [showBanner, setShowBanner] = useState(false);
-  const { data: session } = useSession();
   // When the user arrives via a Web Push notification (URL shape:
   // /inbox/:inbox/:personId — see worker/src/do/notifications.ts and
   // the route in App.tsx), pre-select that person so the tab shows the
@@ -878,8 +1242,6 @@ export default function InboxPage() {
 
   useRealtimeUpdates(incrementRefreshKey, onShouldPromptPush);
 
-  const isAdmin = session?.user?.role === "admin";
-
   const internalDomains =
     stats?.senderIdentities?.map((st) => {
       const at = st.email.lastIndexOf("@");
@@ -967,6 +1329,14 @@ export default function InboxPage() {
       } else showToast({ kind: "info", message: "Nothing to undo" });
     } else if (targets.length === 0) {
       handled = false;
+    } else if (k === "#") {
+      // Trash (with Undo). Inside Trash, admins delete forever (asks).
+      if (!inTrash) trashMany(targets);
+      else if (isAdmin) void deleteForever(targets);
+      else handled = false;
+    } else if (inTrash && ["e", "b", "p"].includes(k)) {
+      // Archive / snooze / pin don't apply in Trash: restore first.
+      handled = false;
     } else if (k === "e") {
       if (targets.length === 1) mailActionsFor(targets[0]).onArchive?.();
       else archiveMany(targets);
@@ -1044,17 +1414,37 @@ export default function InboxPage() {
       />
     );
 
+  // Every row on this page is checked, and more rows match: offer
+  // "Select all N" (Gmail-style), which switches bulk actions to the
+  // whole folder + filters on the server.
+  const pageAllSelected =
+    items.length > 0 &&
+    items.every((it) =>
+      it.type === "person"
+        ? selectedIds.has(it.id)
+        : selectedConversationIds.has(it.id),
+    );
   const selectionBar = (
     <SelectionBar
       count={selectionCount}
       busy={bulkBusy}
       onMarkRead={handleBulkMarkRead}
-      onBlock={handleBlockSelected}
+      onBlock={allMatching || inTrash ? undefined : handleBlockSelected}
       onClear={clearSelection}
-      onArchive={handleBulkArchive}
+      onArchive={inTrash ? undefined : handleBulkArchive}
       archiveLabel={folder === "archive" ? "Move to inbox" : "Archive"}
-      onSnooze={handleBulkSnooze}
-      onStar={handleBulkStar}
+      onSnooze={inTrash ? undefined : handleBulkSnooze}
+      onStar={inTrash ? undefined : handleBulkStar}
+      onTrash={inTrash ? undefined : handleBulkTrash}
+      onRestore={inTrash ? handleBulkRestore : undefined}
+      onDeleteForever={inTrash && isAdmin ? handleBulkDeleteForever : undefined}
+      matchingTotal={peopleTotal}
+      allMatching={allMatching}
+      onSelectAllMatching={
+        pageAllSelected && peopleTotal > items.length
+          ? () => setAllMatching(true)
+          : undefined
+      }
     />
   );
 
@@ -1114,7 +1504,41 @@ export default function InboxPage() {
             onCompose={onCompose}
             agentPlanActive={agentPlanOpen}
             onAgentPlanToggle={toggleAgentPlan}
+            onMarkAllRead={inTrash ? undefined : handleMarkFolderRead}
+            unreadCount={aggregates.unreadRowCount}
+            markAllReadBusy={markingAll}
           />
+          {inTrash && !agentPlanOpen && (
+            <div
+              className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-2 rounded-xl border border-border bg-bg-subtle px-3.5 py-2.5 text-[13px] text-text-secondary"
+              data-testid="trash-notice"
+            >
+              <Trash2 size={14} className="shrink-0 text-text-tertiary" />
+              <span className="min-w-0 flex-1">
+                Conversations in Trash are hidden from your other folders, for
+                you only. New mail brings one back.{" "}
+                {isAdmin
+                  ? "Delete forever removes a person and their mail for everyone; group conversations can only be restored."
+                  : "Only admins can delete mail forever."}
+              </span>
+              {isAdmin && peopleTotal > 0 && (
+                <button
+                  type="button"
+                  onClick={() => void emptyTrash()}
+                  disabled={bulkBusy}
+                  data-testid="empty-trash"
+                  className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-lg border border-border-strong bg-card px-3 text-[13px] font-medium text-destructive shadow-card transition-colors hover:bg-destructive-subtle disabled:opacity-50"
+                >
+                  {bulkBusy ? (
+                    <Loader2 size={13} className="animate-spin" />
+                  ) : (
+                    <Trash2 size={13} />
+                  )}
+                  Empty Trash
+                </button>
+              )}
+            </div>
+          )}
         </div>
       )}
 
@@ -1198,7 +1622,6 @@ export default function InboxPage() {
               )}
               <PersonList
                 items={items}
-                setItems={setItems}
                 loading={peopleLoading}
                 total={peopleTotal}
                 pageSize={PEOPLE_PAGE_SIZE}
@@ -1213,9 +1636,6 @@ export default function InboxPage() {
                 onSelectConversation={(c) => {
                   setSelectedPerson(null);
                   setSelectedConversation(c);
-                }}
-                onPersonDeleted={(id) => {
-                  if (selectedPerson?.id === id) setSelectedPerson(null);
                 }}
                 isAdmin={isAdmin}
                 selectedIds={selectedIds}

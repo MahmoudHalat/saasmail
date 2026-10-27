@@ -41,3 +41,39 @@ export async function applyToFolder(
   for (const c of chunks(refs)) await updateMailState(c, patch);
   return refs;
 }
+
+/** Apply a mail-state patch to a known list of rows (e.g. to undo). */
+export async function applyToRefs(
+  refs: MailItemRef[],
+  patch: Parameters<typeof updateMailState>[1],
+): Promise<void> {
+  for (const c of chunks(refs)) await updateMailState(c, patch);
+}
+
+/**
+ * Delete forever every person row matching a list query (Empty Trash).
+ * Group conversations can't be hard-deleted, so they are left as they are
+ * and counted in `skippedGroups`. Admins only (the server refuses others).
+ */
+export async function deleteFolderForever(
+  query: Omit<GroupedQuery, "page" | "limit" | "withTabCounts">,
+  deleteOne: (personId: string) => Promise<unknown>,
+): Promise<{ deleted: number; failed: number; skippedGroups: number }> {
+  const { data } = await fetchGroupedIds(query);
+  const people = data.filter((r) => r.type === "person").map((r) => r.id);
+  let deleted = 0;
+  let failed = 0;
+  // A few at a time: each delete also removes the person's attachments.
+  for (const batch of chunks(people, 4)) {
+    const results = await Promise.allSettled(batch.map((id) => deleteOne(id)));
+    for (const r of results) {
+      if (r.status === "fulfilled") deleted++;
+      else failed++;
+    }
+  }
+  return {
+    deleted,
+    failed,
+    skippedGroups: data.length - people.length,
+  };
+}

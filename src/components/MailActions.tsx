@@ -3,14 +3,18 @@ import {
   Archive,
   ArchiveRestore,
   BellOff,
+  Check,
   CheckCheck,
   Clock,
+  FolderInput,
   MoreHorizontal,
   Pin,
   PinOff,
   Star,
   Trash2,
+  Undo2,
 } from "lucide-react";
+import type { MailCategory } from "@/lib/api";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -40,6 +44,10 @@ export interface MailStateLike {
   pinned: boolean;
   archivedAt: number | null;
   snoozedUntil: number | null;
+  /** Set while the row is in this user's Trash. */
+  trashedAt?: number | null;
+  /** The inbox tab the row sorts into (primary, promotions…). */
+  category?: MailCategory;
 }
 
 /** Callbacks the inbox wires to updateMailState. All optional. */
@@ -51,8 +59,28 @@ export interface MailActionHandlers {
   /** Snooze until a unix-seconds time; null wakes the row. */
   onSnooze?: (until: number | null) => void;
   onMarkRead?: () => void;
+  /** Move to this user's Trash (with Undo). */
+  onTrash?: () => void;
+  /** Take out of Trash. */
+  onRestore?: () => void;
+  /** Delete forever (asks first). Admins only; Trash only. */
   onDelete?: () => void;
+  /** "Move to Primary / Promotions / Social / Updates" for this sender. */
+  onMoveToCategory?: (category: MailCategory) => void;
 }
+
+export const CATEGORY_LABELS: Record<MailCategory, string> = {
+  primary: "Primary",
+  promotions: "Promotions",
+  social: "Social",
+  updates: "Updates",
+};
+const CATEGORIES: MailCategory[] = [
+  "primary",
+  "promotions",
+  "social",
+  "updates",
+];
 
 function snoozeLabel(until: number) {
   const d = new Date(until * 1000);
@@ -186,6 +214,25 @@ export function MailActionButtons({
   const archived = !!state.archivedAt;
   return (
     <div className={cn("flex items-center gap-0.5", className)}>
+      {handlers.onRestore && (
+        <IconAction
+          label="Restore from Trash"
+          onClick={handlers.onRestore}
+          testId="mail-restore-button"
+        >
+          <Undo2 />
+        </IconAction>
+      )}
+      {handlers.onDelete && (
+        <IconAction
+          label="Delete forever"
+          onClick={handlers.onDelete}
+          testId="mail-delete-forever-button"
+          className="hover:bg-destructive-subtle hover:text-destructive"
+        >
+          <Trash2 />
+        </IconAction>
+      )}
       {handlers.onArchive && (
         <IconAction
           label={archived ? "Move to inbox" : "Archive"}
@@ -236,6 +283,16 @@ export function MailActionButtons({
           {state.pinned ? <PinOff /> : <Pin />}
         </IconAction>
       )}
+      {handlers.onTrash && (
+        <IconAction
+          label="Move to Trash"
+          shortcut="#"
+          onClick={handlers.onTrash}
+          testId="mail-trash-button"
+        >
+          <Trash2 />
+        </IconAction>
+      )}
       {showStar && handlers.onToggleStar && (
         <StarToggle starred={state.starred} onToggle={handlers.onToggleStar} />
       )}
@@ -245,7 +302,7 @@ export function MailActionButtons({
 
 /**
  * The "⋯" row menu: every action in one place. Always shown on touch
- * screens (where there is no hover bar) and for admins' delete.
+ * screens (where there is no hover bar).
  */
 export function MailRowMenu({
   state,
@@ -323,6 +380,46 @@ export function MailRowMenu({
             <Kbd>⇧I</Kbd>
           </DropdownMenuItem>
         )}
+        {handlers.onMoveToCategory && (
+          <DropdownMenuSub>
+            <DropdownMenuSubTrigger data-testid="mail-move-to-tab">
+              <FolderInput className="text-text-secondary" />
+              Move to tab
+            </DropdownMenuSubTrigger>
+            <DropdownMenuSubContent className="w-52">
+              <DropdownMenuLabel>Always show this sender in</DropdownMenuLabel>
+              {CATEGORIES.map((c) => (
+                <DropdownMenuItem
+                  key={c}
+                  onSelect={() => handlers.onMoveToCategory?.(c)}
+                >
+                  <span className="flex-1">{CATEGORY_LABELS[c]}</span>
+                  {state.category === c && <Check className="text-accent" />}
+                </DropdownMenuItem>
+              ))}
+            </DropdownMenuSubContent>
+          </DropdownMenuSub>
+        )}
+        {handlers.onRestore && (
+          <DropdownMenuItem
+            data-testid="mail-restore-item"
+            onSelect={handlers.onRestore}
+          >
+            <Undo2 /> Restore
+          </DropdownMenuItem>
+        )}
+        {handlers.onTrash && (
+          <>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem
+              data-testid="mail-trash-item"
+              onSelect={handlers.onTrash}
+            >
+              <Trash2 /> Move to Trash
+              <Kbd>#</Kbd>
+            </DropdownMenuItem>
+          </>
+        )}
         {handlers.onDelete && (
           <>
             <DropdownMenuSeparator />
@@ -331,7 +428,7 @@ export function MailRowMenu({
               onSelect={handlers.onDelete}
               className="text-destructive focus:bg-destructive-subtle focus:text-destructive [&>svg]:text-destructive"
             >
-              <Trash2 /> Delete person
+              <Trash2 /> Delete forever
             </DropdownMenuItem>
           </>
         )}

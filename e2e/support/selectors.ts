@@ -34,6 +34,8 @@ export const TEST_IDS = {
   personUnreadBadge: "person-unread-badge",
   personKebabMenu: "person-kebab-menu",
   personDeleteButton: "person-delete-button",
+  mailTrashItem: "mail-trash-item",
+  mailRestoreItem: "mail-restore-item",
   personSearchInput: "person-search-input",
   personSearchClear: "person-search-clear",
 

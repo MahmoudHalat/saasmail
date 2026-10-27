@@ -22,11 +22,10 @@ import type { ComposePrefill } from "@/pages/ComposeModal";
 import { sanitizeEmailHtml } from "@/lib/sanitize-html";
 import { copyMessageLink, messageDomId } from "@/lib/message-link";
 import {
-  HIDE_SIGNATURES_EVENT,
-  readHideSignatures,
   stripSignatureFromHtml,
   stripSignatureFromText,
 } from "@/lib/signatures";
+import { useCommonSettings } from "@/lib/default-layout-settings";
 
 interface ChatInboxSectionProps {
   group: ThreadInboxGroup;
@@ -132,24 +131,10 @@ function Bubble({
   const isSent = email.type === "sent";
   const isUnread = email.type === "received" && email.isRead === 0;
 
-  // Subscribe to the local "Hide signatures in chat" preference. When on,
+  // "Hide signatures in chat" (Settings, saved to the account). When on,
   // we strip the trailing signature block from each bubble's body so the
-  // chat feed stays scannable. Updates instantly on toggle thanks to a
-  // custom event from `lib/signatures.ts`.
-  const [hideSignatures, setHideSignatures] = useState(() =>
-    readHideSignatures(),
-  );
-  useEffect(() => {
-    function refresh() {
-      setHideSignatures(readHideSignatures());
-    }
-    window.addEventListener(HIDE_SIGNATURES_EVENT, refresh);
-    window.addEventListener("storage", refresh);
-    return () => {
-      window.removeEventListener(HIDE_SIGNATURES_EVENT, refresh);
-      window.removeEventListener("storage", refresh);
-    };
-  }, []);
+  // chat feed stays scannable.
+  const [{ hideSignatures }] = useCommonSettings();
 
   // Apply the strip to a per-bubble copy of the email so downstream useMemos
   // operate on the pruned text/html rather than the raw originals.

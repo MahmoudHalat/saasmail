@@ -12,6 +12,9 @@ import {
   RefreshCw,
   Bot,
   Check,
+  CheckCheck,
+  Layers,
+  Loader2,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
@@ -27,7 +30,9 @@ import {
   defaultDirectionFor,
   type InboxSort,
   type InboxSortSpec,
+  type MailCategory,
 } from "@/lib/api";
+import { CATEGORY_LABELS } from "@/components/MailActions";
 
 export interface InboxFilters {
   recipient?: string;
@@ -36,6 +41,8 @@ export interface InboxFilters {
   drafts?: boolean;
   /** Only contacts currently enrolled in a sequence. */
   sequenced?: boolean;
+  /** Only one inbox tab (Primary, Promotions, Social, Updates). */
+  category?: MailCategory;
 }
 
 export type InboxView = "list" | "table";
@@ -72,6 +79,14 @@ interface InboxToolbarProps {
   title?: string;
   /** Optional count shown after the title. */
   count?: number;
+  /**
+   * "Mark all as read": every unread conversation in the current folder
+   * and filters, on the server (not just the loaded page).
+   */
+  onMarkAllRead?: () => void;
+  /** Unread conversations in the current folder + filters. */
+  unreadCount?: number;
+  markAllReadBusy?: boolean;
 }
 
 const SORT_OPTIONS: Array<{ value: InboxSort; label: string }> = [
@@ -106,6 +121,9 @@ export default function InboxToolbar({
   onAgentPlanToggle,
   title,
   count,
+  onMarkAllRead,
+  unreadCount = 0,
+  markAllReadBusy,
 }: InboxToolbarProps) {
   const activeInbox = inboxes.find((i) => i.email === filters.recipient);
   const activeLabel = activeInbox
@@ -115,7 +133,15 @@ export default function InboxToolbar({
     !!filters.recipient ||
     !!filters.unread ||
     !!filters.drafts ||
-    !!filters.sequenced;
+    !!filters.sequenced ||
+    !!filters.category;
+  const markAll = onMarkAllRead ? (
+    <MarkAllReadChip
+      onClick={onMarkAllRead}
+      busy={!!markAllReadBusy}
+      unread={unreadCount}
+    />
+  ) : null;
 
   return (
     <div className="flex flex-col gap-3">
@@ -242,6 +268,7 @@ export default function InboxToolbar({
             hasActiveFilters={hasActiveFilters}
           />
           <span className="ml-auto" />
+          {markAll}
           <SortControl sortSpec={sortSpec} onSortChange={onSortChange} />
         </div>
       </div>
@@ -253,8 +280,41 @@ export default function InboxToolbar({
           activeLabel={activeLabel}
           hasActiveFilters={hasActiveFilters}
         />
+        {markAll}
       </div>
     </div>
+  );
+}
+
+function MarkAllReadChip({
+  onClick,
+  busy,
+  unread,
+}: {
+  onClick: () => void;
+  busy: boolean;
+  unread: number;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={busy || unread === 0}
+      data-testid="folder-mark-all-read"
+      title={
+        unread === 0
+          ? "Nothing unread here"
+          : `Mark all ${unread.toLocaleString()} unread conversations here as read`
+      }
+      className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-lg px-2 text-[13px] font-medium text-text-secondary transition-colors hover:bg-bg-muted hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-45 disabled:hover:bg-transparent"
+    >
+      {busy ? (
+        <Loader2 size={13} className="animate-spin" />
+      ) : (
+        <CheckCheck size={13} />
+      )}
+      <span className="whitespace-nowrap">Mark all as read</span>
+    </button>
   );
 }
 
@@ -323,6 +383,48 @@ function FilterRow({
         </DropdownMenuContent>
       </DropdownMenu>
 
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <button
+            type="button"
+            data-testid="filter-category"
+            className={cn(chipClass(!!filters.category), "pr-2")}
+          >
+            <Layers size={13} />
+            <span>
+              {filters.category
+                ? CATEGORY_LABELS[filters.category]
+                : "All tabs"}
+            </span>
+            <ChevronDown size={13} className="opacity-60" />
+          </button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="start" className="w-56">
+          <DropdownMenuItem
+            onSelect={() =>
+              onFiltersChange({ ...filters, category: undefined })
+            }
+          >
+            <span className="flex-1">All tabs</span>
+            {!filters.category && <Check className="text-accent" />}
+          </DropdownMenuItem>
+          <DropdownMenuSeparator />
+          {(Object.keys(CATEGORY_LABELS) as MailCategory[]).map((c) => (
+            <DropdownMenuItem
+              key={c}
+              onSelect={() => onFiltersChange({ ...filters, category: c })}
+            >
+              <span className="flex-1">{CATEGORY_LABELS[c]}</span>
+              {filters.category === c && <Check className="text-accent" />}
+            </DropdownMenuItem>
+          ))}
+          <DropdownMenuSeparator />
+          <p className="px-2 py-1.5 text-xs leading-snug text-text-tertiary">
+            Sorted by sender. Fix a sender with Move to tab in its menu.
+          </p>
+        </DropdownMenuContent>
+      </DropdownMenu>
+
       <ToolbarToggle
         label="Unread"
         active={!!filters.unread}
@@ -353,6 +455,7 @@ function FilterRow({
               unread: false,
               drafts: false,
               sequenced: false,
+              category: undefined,
             })
           }
           className="inline-flex h-8 shrink-0 items-center gap-1 rounded-lg px-2 text-[13px] font-medium text-text-secondary transition-colors hover:bg-bg-muted hover:text-text-primary"

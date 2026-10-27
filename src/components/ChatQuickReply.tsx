@@ -5,8 +5,12 @@ import {
   sendEmail,
   fetchDraft,
   deleteDraft,
+  saveDraft,
   type CcEntry,
 } from "@/lib/api";
+import { sendWithUndo } from "@/lib/undo-send";
+import { useCommonSettings } from "@/lib/default-layout-settings";
+import { showToast } from "@/lib/toast";
 import { dispatchEmailSent } from "@/lib/email-events";
 import { serverErrorMessage } from "@/lib/error-message";
 import AttachmentPicker from "@/components/AttachmentPicker";
@@ -72,13 +76,20 @@ export default function ChatQuickReply({
   onOpenCompose,
 }: ChatQuickReplyProps) {
   const [text, setText] = useState("");
-  const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [files, setFiles] = useState<File[]>([]);
   const ref = useRef<HTMLTextAreaElement | null>(null);
   // Which reply target we've already restored a saved draft for, so we fetch
   // once per email and never clobber text the user is typing.
   const restoredForRef = useRef<string | null>(null);
+  const [{ undoSendSeconds }] = useCommonSettings();
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
 
   // Surface a saved reply draft (e.g. one a WebMCP agent drafted, or a reply
   // the user started in the full composer) so it's visible right here instead
@@ -116,61 +127,105 @@ export default function ChatQuickReply({
     el.style.overflowY = el.scrollHeight > max ? "auto" : "hidden";
   }, [text]);
 
-  const canSend = text.trim().length > 0 && !sending && !overCap;
+  // The box clears as soon as a message is sent, so a new one can be
+  // written (and sent) while the last is still in its undo window.
+  const canSend = text.trim().length > 0 && !overCap;
 
-  async function handleSend() {
+  function handleSend() {
     if (!canSend) return;
-    setSending(true);
     setError(null);
-    try {
-      if (latestReceivedEmailId) {
+    const sentText = text;
+    const sentFiles = files;
+    const replyId = latestReceivedEmailId;
+    const filesPayload =
+      sentFiles.length > 0
+        ? { files: sentFiles.map((file) => ({ file })) }
+        : {};
+    const send = async () => {
+      if (replyId) {
         // Default to reply-all semantics for the chat bubble: carry the
         // original CC roster (already filtered by the parent to exclude
         // our own inbox) so group conversations don't silently collapse
         // to a 1:1. Users who want plain "reply" open the full composer.
-        await replyToEmail(latestReceivedEmailId, {
-          bodyHtml: plainTextToHtml(text),
-          bodyText: text,
+        await replyToEmail(replyId, {
+          bodyHtml: plainTextToHtml(sentText),
+          bodyText: sentText,
           fromAddress: inboxAddress,
           ...(replyCc && replyCc.length > 0 ? { cc: replyCc } : {}),
-          ...(files.length > 0
-            ? { files: files.map((file) => ({ file })) }
-            : {}),
+          ...filesPayload,
         });
       } else {
         await sendEmail({
           to: personEmail,
           fromAddress: inboxAddress,
           subject: "(no subject)",
-          bodyHtml: plainTextToHtml(text),
-          bodyText: text,
-          ...(files.length > 0
-            ? { files: files.map((file) => ({ file })) }
-            : {}),
+          bodyHtml: plainTextToHtml(sentText),
+          bodyText: sentText,
+          ...filesPayload,
         });
       }
-      // The reply went out — discard any saved draft for it so it doesn't
-      // reappear in this box (or the Drafts filter) next time.
-      if (latestReceivedEmailId) {
-        restoredForRef.current = latestReceivedEmailId;
-        deleteDraft(`reply:${latestReceivedEmailId}`).catch(() => {});
-      }
-      dispatchEmailSent({
-        fromAddress: inboxAddress,
-        to: personEmail,
-        origin: "chat-quick-reply",
-      });
-      setText("");
-      setFiles([]);
-      onSent();
-    } catch (e) {
-      // Prefer what the server said — a Gmail reply it refused was *not*
-      // queued and has to be sent again, which the generic string hides.
-      setError(serverErrorMessage(e) ?? "Failed to send message");
-      console.error(e);
-    } finally {
-      setSending(false);
-    }
+    };
+    // Put the message back in the box (Undo, or a failed send). If the user
+    // has typed something new meanwhile, keep both.
+    const restore = () => {
+      setText((cur) => (cur.trim() ? `${sentText}\n${cur}` : sentText));
+      setFiles((cur) => [...sentFiles, ...cur]);
+    };
+
+    // The box clears at once; the message waits out the undo window.
+    setText("");
+    setFiles([]);
+    sendWithUndo({
+      seconds: undoSendSeconds,
+      label: "Sending…",
+      send,
+      onUndo: () => {
+        if (mountedRef.current) {
+          restore();
+          requestAnimationFrame(() => ref.current?.focus());
+        } else if (replyId) {
+          // The conversation was closed meanwhile: keep it as a draft.
+          saveDraft({
+            contextKey: `reply:${replyId}`,
+            fromAddress: inboxAddress,
+            bodyHtml: plainTextToHtml(sentText),
+            bodyText: sentText,
+            replyToEmailId: replyId,
+          })
+            .then(() =>
+              showToast({
+                kind: "info",
+                message: "Reply not sent",
+                description: "It's saved as a draft on that conversation.",
+              }),
+            )
+            .catch(() => {});
+        }
+      },
+      onSent: () => {
+        // The reply went out — discard any saved draft for it so it doesn't
+        // reappear in this box (or the Drafts filter) next time.
+        if (replyId) {
+          restoredForRef.current = replyId;
+          deleteDraft(`reply:${replyId}`).catch(() => {});
+        }
+        dispatchEmailSent({
+          fromAddress: inboxAddress,
+          to: personEmail,
+          origin: "chat-quick-reply",
+        });
+        if (!mountedRef.current) return;
+        onSent();
+      },
+      onError: (e) => {
+        console.error(e);
+        if (!mountedRef.current) return;
+        restore();
+        // Prefer what the server said — a Gmail reply it refused was *not*
+        // queued and has to be sent again, which the generic string hides.
+        setError(serverErrorMessage(e) ?? "Failed to send message");
+      },
+    });
   }
 
   function handleKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
@@ -229,7 +284,7 @@ export default function ChatQuickReply({
           disabled={!canSend}
           className="inline-flex h-8 shrink-0 items-center rounded-lg bg-accent px-3.5 text-[13px] font-medium text-accent-foreground shadow-card transition-colors hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-40"
         >
-          {sending ? "Sending…" : "Send"}
+          Send
         </button>
       </div>
       <div className="mt-1.5 flex items-center justify-between">
