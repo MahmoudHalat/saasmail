@@ -28,8 +28,6 @@ import { usePullToRefresh } from "@/hooks/usePullToRefresh";
 interface PersonListProps {
   /** Mixed list of person + group rows from /api/people/grouped. */
   items: GroupedItem[];
-  /** @deprecated Unused: delete now goes through `mailActions`. */
-  setItems?: (items: GroupedItem[]) => void;
   loading: boolean;
   total: number;
   pageSize: number;
@@ -39,8 +37,6 @@ interface PersonListProps {
   selectedConversationId: string | null;
   onSelectPerson: (person: GroupedPerson) => void;
   onSelectConversation: (conv: GroupedConversation) => void;
-  /** @deprecated Unused: delete now goes through `mailActions`. */
-  onPersonDeleted?: (personId: string) => void;
   /** Admins get the `person-kebab-menu` test id on the row menu. */
   isAdmin?: boolean;
   selectedIds?: Set<string>;

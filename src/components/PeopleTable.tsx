@@ -222,19 +222,16 @@ export default function PeopleTable({
     let unread = 0;
     let withAttachments = 0;
     let multiInbox = 0;
-    let groupCount = 0;
     for (const it of items) {
       if (it.type === "group") {
         if (it.unreadCount > 0) unread++;
         if (it.hasAttachment === 1) withAttachments++;
-        groupCount++;
         continue;
       }
       if (it.unreadCount > 0) unread++;
       if (it.hasAttachment === 1) withAttachments++;
       if (it.recipientCount > 1) multiInbox++;
     }
-    void groupCount; // currently unused; kept for parity with prior behavior
     return {
       total: items.length,
       unread,

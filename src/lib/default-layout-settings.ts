@@ -1,16 +1,9 @@
 import { useLayoutSettings } from "@/lib/preferences";
-import {
-  defaultDirectionFor,
-  type InboxSort,
-  type InboxSortSpec,
-} from "@/lib/api";
-import { HIDE_SIGNATURES_STORAGE_KEY } from "@/lib/signatures";
+import { type InboxSort, type InboxSortSpec } from "@/lib/api";
 
 /**
  * View settings of the default layout, saved to the account
  * (`layoutSettings.default`) so they follow the user to every device.
- * They used to live in this browser's localStorage; the old keys are read
- * once and moved into the account.
  */
 export interface DefaultLayoutSettings extends Record<string, unknown> {
   /** The portal rail is collapsed to icons. */
@@ -31,25 +24,10 @@ export const DEFAULT_LAYOUT_DEFAULTS: DefaultLayoutSettings = {
   inboxSort: { key: "recency", direction: "desc" },
 };
 
-/** Old device-only keys. */
-export const LEGACY_KEYS = {
-  railCollapsed: "saasmail.railCollapsed",
-  listWidth: "saasmail.sidebarWidth",
-  inboxSort: "saasmail.inboxSort",
-} as const;
-
 const SORT_KEYS: InboxSort[] = ["recency", "unread", "inbox", "attachments"];
 
-/** Parse a saved sort: `{key, direction}` JSON, or an older bare key. */
-export function parseInboxSort(raw: unknown): InboxSortSpec | null {
-  let v = raw;
-  if (typeof v === "string") {
-    try {
-      v = JSON.parse(v);
-    } catch {
-      /* a bare key, handled below */
-    }
-  }
+/** Validate a saved `{key, direction}` sort. */
+export function parseInboxSort(v: unknown): InboxSortSpec | null {
   if (
     v &&
     typeof v === "object" &&
@@ -62,12 +40,6 @@ export function parseInboxSort(raw: unknown): InboxSortSpec | null {
       direction: (v as InboxSortSpec).direction,
     };
   }
-  if (typeof v === "string" && SORT_KEYS.includes(v as InboxSort)) {
-    return {
-      key: v as InboxSort,
-      direction: defaultDirectionFor(v as InboxSort),
-    };
-  }
   return null;
 }
 
@@ -77,34 +49,11 @@ export function clampListWidth(n: unknown): number {
   return Math.min(MAX_LIST_WIDTH, Math.max(MIN_LIST_WIDTH, Math.round(w)));
 }
 
-function readLocal(key: string): string | null {
-  try {
-    return window.localStorage.getItem(key);
-  } catch {
-    return null;
-  }
-}
-
-/** What this browser still has under the old keys. */
-export function readLegacyDefaultLayout(): Partial<DefaultLayoutSettings> | null {
-  const out: Partial<DefaultLayoutSettings> = {};
-  const rail = readLocal(LEGACY_KEYS.railCollapsed);
-  if (rail === "1" || rail === "0") out.railCollapsed = rail === "1";
-  const width = readLocal(LEGACY_KEYS.listWidth);
-  if (width && Number.isFinite(Number(width)))
-    out.listWidth = clampListWidth(width);
-  const sort = readLocal(LEGACY_KEYS.inboxSort);
-  const parsed = sort ? parseInboxSort(sort) : null;
-  if (parsed) out.inboxSort = parsed;
-  return Object.keys(out).length > 0 ? out : null;
-}
-
 /** The default layout's account-saved view settings. */
 export function useDefaultLayoutSettings() {
   return useLayoutSettings<DefaultLayoutSettings>(
     "default",
     DEFAULT_LAYOUT_DEFAULTS,
-    readLegacyDefaultLayout,
   );
 }
 
@@ -122,15 +71,6 @@ export const COMMON_DEFAULTS: CommonSettings = {
   hideSignatures: false,
 };
 
-export function readLegacyCommon(): Partial<CommonSettings> | null {
-  const v = readLocal(HIDE_SIGNATURES_STORAGE_KEY);
-  return v === "1" || v === "0" ? { hideSignatures: v === "1" } : null;
-}
-
 export function useCommonSettings() {
-  return useLayoutSettings<CommonSettings>(
-    "common",
-    COMMON_DEFAULTS,
-    readLegacyCommon,
-  );
+  return useLayoutSettings<CommonSettings>("common", COMMON_DEFAULTS);
 }

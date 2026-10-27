@@ -183,7 +183,7 @@ export default function InboxPage() {
     totalUnreadEmails: 0,
   });
   const [stats, setStats] = useState<Stats | null>(null);
-  // Deep-link support: seed search from `?q=` (or `?search=`) and the Drafts /
+  // Deep-link support: seed search from `?q=` and the Drafts /
   // Sequenced filters from `?drafts=1` / `?sequenced=1` so an external link —
   // or a WebMCP action that just saved a draft or enrolled a contact — lands
   // on the right pre-filtered view.
@@ -245,7 +245,7 @@ export default function InboxPage() {
     },
     [setSearchParams],
   );
-  const urlQuery = searchParams.get("q") ?? searchParams.get("search");
+  const urlQuery = searchParams.get("q");
   const [search, setSearch] = useState(() => urlQuery ?? "");
   // A search linked from elsewhere (the command palette's "Search mail
   // for …") while already on the inbox: adopt the new ?q=.

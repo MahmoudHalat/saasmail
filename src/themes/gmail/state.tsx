@@ -19,8 +19,6 @@ export type GmailDensity = "default" | "comfortable" | "compact";
 export type InboxType = "default" | "unread" | "starred";
 export type SwipeAction = "archive" | "delete" | "read" | "snooze" | "none";
 
-const VIEW_KEY = "saasmail.gmail.view";
-
 export interface ViewPrefs {
   readingPane: ReadingPane;
   density: Exclude<GmailDensity, "compact">;
@@ -46,7 +44,7 @@ export const DEFAULT_VIEW: ViewPrefs = {
 
 const SWIPES: SwipeAction[] = ["archive", "delete", "read", "snooze", "none"];
 
-/** Guard against odd values saved by older builds. */
+/** The server stores layout settings as-is; coerce anything unexpected to defaults. */
 function sanitizeView(raw: Partial<ViewPrefs>): ViewPrefs {
   return {
     readingPane: ["right", "below"].includes(raw.readingPane as string)
@@ -70,14 +68,10 @@ function sanitizeView(raw: Partial<ViewPrefs>): ViewPrefs {
 
 /**
  * Gmail view settings, saved to the account (they follow the user across
- * devices). Values from the old device-only key migrate on first load.
+ * devices).
  */
 export function useGmailView() {
-  const [raw, setRaw] = useLayoutSettings<ViewPrefs>(
-    "gmail",
-    DEFAULT_VIEW,
-    VIEW_KEY,
-  );
+  const [raw, setRaw] = useLayoutSettings<ViewPrefs>("gmail", DEFAULT_VIEW);
   const view = useMemo(() => sanitizeView(raw), [raw]);
   const update = useCallback(
     (patch: Partial<ViewPrefs>) => setRaw(patch),

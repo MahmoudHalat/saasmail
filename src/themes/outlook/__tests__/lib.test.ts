@@ -11,7 +11,6 @@ import {
   initials,
   parseFolder,
   rangeKeys,
-  splitFocused,
   swipeOutcome,
   parseSearchQuery,
   buildSearchQuery,
@@ -98,24 +97,6 @@ describe("groupRows", () => {
     expect(
       groupRows(items, "unread", (i) => i.id, NOW).map((g) => g.label),
     ).toEqual(["Unread", "Read"]);
-  });
-});
-
-describe("splitFocused", () => {
-  it("puts primary, flagged and pinned rows in Focused, the rest in Other", () => {
-    const { focused, other } = splitFocused([
-      row("primary", { category: "primary" }),
-      row("promo-flagged", { category: "promotions", starred: true }),
-      row("social-pinned", { category: "social", pinned: true }),
-      row("updates", { category: "updates" }),
-      row("promo", { category: "promotions" }),
-    ]);
-    expect(focused.map((i) => i.id)).toEqual([
-      "primary",
-      "promo-flagged",
-      "social-pinned",
-    ]);
-    expect(other.map((i) => i.id)).toEqual(["updates", "promo"]);
   });
 });
 

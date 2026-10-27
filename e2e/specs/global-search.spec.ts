@@ -146,20 +146,4 @@ test.describe.serial("global search", () => {
     await expect(aliceRow).toBeVisible();
     await expect(bobRow).not.toBeVisible();
   });
-
-  test("?search= alias also seeds the search box", async ({ page }) => {
-    await page.goto("/?search=billing");
-
-    const input = page.getByTestId(TEST_IDS.personSearchInput);
-    await expect(input).toHaveValue("billing");
-
-    const bobRow = page.locator(
-      `[data-testid="${TEST_IDS.personRow}"][data-person-id="p_bob"]`,
-    );
-    const aliceRow = page.locator(
-      `[data-testid="${TEST_IDS.personRow}"][data-person-id="p_alice"]`,
-    );
-    await expect(bobRow).toBeVisible();
-    await expect(aliceRow).not.toBeVisible();
-  });
 });

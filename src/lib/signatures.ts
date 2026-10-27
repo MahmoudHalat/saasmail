@@ -6,9 +6,6 @@
  * (`layoutSettings.common.hideSignatures`, see useCommonSettings).
  */
 
-/** Old device-only key; its value is moved into the account on first use. */
-export const HIDE_SIGNATURES_STORAGE_KEY = "saasmail.hideSignaturesInChat";
-
 /**
  * Strip the trailing signature block from an HTML email body. We look for
  * either a `<div data-signature>…</div>` (our own auto-attached marker) or

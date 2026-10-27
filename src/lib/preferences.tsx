@@ -4,7 +4,6 @@ import {
   useContext,
   useEffect,
   useMemo,
-  useRef,
   useState,
   type ReactNode,
 } from "react";
@@ -313,23 +312,13 @@ export function useUiTheme(): UiTheme {
 
 /**
  * One layout's view settings (reading pane, swipe actions, favorites …),
- * saved to the account so they follow the user across devices. On first
- * use, values still in this browser's localStorage under `legacyKey` are
- * moved into the account.
- *
- * `legacy` may instead be a function that reads old device-only values
- * (several keys, plain strings …) and returns the ones it found. Those are
- * moved into the account for any key the account copy doesn't have yet,
- * once per tab.
+ * saved to the account so they follow the user across devices.
  */
-const migratedLegacy = new Set<string>();
-
 export function useLayoutSettings<T extends Record<string, unknown>>(
   layout: string,
   defaults: T,
-  legacy?: string | (() => Partial<T> | null),
 ): [T, (patch: Partial<T>) => void] {
-  const { layoutSettings, setPreferences, loaded } = usePreferences();
+  const { layoutSettings, setPreferences } = usePreferences();
   const saved = (layoutSettings[layout] ?? null) as Partial<T> | null;
   const value = useMemo(
     () => ({ ...defaults, ...(saved ?? {}) }) as T,
@@ -338,50 +327,6 @@ export function useLayoutSettings<T extends Record<string, unknown>>(
       JSON.stringify(saved),
     ],
   );
-  const migrated = useRef(false);
-  const legacyKey = typeof legacy === "string" ? legacy : undefined;
-  const legacyRead = typeof legacy === "function" ? legacy : undefined;
-  useEffect(() => {
-    if (!loaded || migrated.current || saved || !legacyKey) return;
-    migrated.current = true;
-    try {
-      const raw = window.localStorage.getItem(legacyKey);
-      if (!raw) return;
-      const legacy = JSON.parse(raw);
-      if (isPlainObject(legacy)) {
-        void setPreferences({
-          layoutSettings: { [layout]: { ...defaults, ...legacy } },
-        });
-      }
-    } catch {
-      /* ignore unreadable legacy values */
-    }
-  }, [loaded, saved, legacyKey, layout, defaults, setPreferences]);
-  // Function form: per key, only what the account doesn't have yet.
-  const missingKeys = Object.keys(defaults)
-    .filter((k) => !saved || !(k in saved))
-    .join(",");
-  useEffect(() => {
-    if (!loaded || !legacyRead || !missingKeys) return;
-    const tag = `${layout}:${missingKeys}`;
-    if (migratedLegacy.has(tag)) return;
-    migratedLegacy.add(tag);
-    let found: Partial<T> | null = null;
-    try {
-      found = legacyRead();
-    } catch {
-      found = null;
-    }
-    if (!found) return;
-    const missing = new Set(missingKeys.split(","));
-    const patch: Record<string, unknown> = {};
-    for (const [k, v] of Object.entries(found))
-      if (missing.has(k) && v !== undefined) patch[k] = v;
-    if (Object.keys(patch).length === 0) return;
-    void setPreferences({
-      layoutSettings: { [layout]: { ...(saved ?? {}), ...patch } },
-    });
-  }, [loaded, legacyRead, missingKeys, layout, saved, setPreferences]);
   const update = useCallback(
     (patch: Partial<T>) => {
       void setPreferences({

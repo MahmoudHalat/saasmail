@@ -1,6 +1,6 @@
 /**
- * Pure helpers for the Outlook layout: folder mapping, date grouping, the
- * Focused / Other split, list time formatting, avatar colours and the
+ * Pure helpers for the Outlook layout: folder mapping, date grouping,
+ * category labels, list time formatting, avatar colours and the
  * Outlook-on-the-web keyboard map. No React here so it stays unit-testable.
  */
 import type { Email, GroupedItem, MailCategory, MailFolder } from "@/lib/api";
@@ -85,8 +85,6 @@ export function folderQuery(id: OlFolderId): {
  * Favorites with Inbox, Sent Items and Drafts, so that is the default.
  */
 export const DEFAULT_FAVORITES = ["inbox", "sent", "drafts"];
-/** The pass-2 default, migrated to Outlook's when the user never changed it. */
-export const LEGACY_DEFAULT_FAVORITES = ["unread", "flagged"];
 
 export function favoriteKey(folder: OlFolderId, label?: string): string {
   return label ? `label:${label}` : folder;
@@ -275,25 +273,6 @@ export const CATEGORY_LABELS: Record<MailCategory, string> = {
   social: "Social",
   updates: "Updates",
 };
-
-/**
- * Focused = the primary category, plus anything pinned or flagged.
- * Other = promotions, social and updates.
- */
-export function isFocused(item: GroupedItem): boolean {
-  return (
-    (item.category ?? "primary") === "primary" || item.starred || item.pinned
-  );
-}
-
-export function splitFocused<T extends GroupedItem>(
-  items: T[],
-): { focused: T[]; other: T[] } {
-  const focused: T[] = [];
-  const other: T[] = [];
-  for (const it of items) (isFocused(it) ? focused : other).push(it);
-  return { focused, other };
-}
 
 // ── Formatting ───────────────────────────────────────────────────────────
 

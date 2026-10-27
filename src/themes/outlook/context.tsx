@@ -10,11 +10,7 @@ import {
 import type { ComposePrefill } from "@/pages/ComposeModal";
 import { fetchStats } from "@/lib/api";
 import { useLayoutSettings } from "@/lib/preferences";
-import {
-  DEFAULT_FAVORITES,
-  LEGACY_DEFAULT_FAVORITES,
-  type SwipeAction,
-} from "./lib";
+import { DEFAULT_FAVORITES, type SwipeAction } from "./lib";
 
 /**
  * State shared between the Outlook shell (suite header, settings flyout,
@@ -57,8 +53,6 @@ export interface LayoutPrefs {
   sort: ListSortPref;
 }
 
-/** Old device-only key; useLayoutSettings migrates it into the account. */
-const LEGACY_LAYOUT_KEY = "saasmail.outlook.layout";
 export const DEFAULT_LAYOUT: LayoutPrefs = {
   focusedInbox: true,
   quickActions: ALL_QUICK_ACTIONS,
@@ -100,13 +94,11 @@ export function sanitizeLayout(
           ALL_QUICK_ACTIONS.includes(a),
         )
       : DEFAULT_LAYOUT.quickActions,
-    favorites:
-      Array.isArray(r.favorites) &&
-      JSON.stringify(r.favorites) !== JSON.stringify(LEGACY_DEFAULT_FAVORITES)
-        ? (r.favorites as unknown[]).filter(
-            (f): f is string => typeof f === "string",
-          )
-        : DEFAULT_LAYOUT.favorites,
+    favorites: Array.isArray(r.favorites)
+      ? (r.favorites as unknown[]).filter(
+          (f): f is string => typeof f === "string",
+        )
+      : DEFAULT_LAYOUT.favorites,
     favoritesOpen: bool(r.favoritesOpen, true),
     accountOpen: bool(r.accountOpen, true),
     inboxesOpen: bool(r.inboxesOpen, true),
@@ -186,12 +178,10 @@ export function OutlookProvider({
   children: ReactNode;
   onTrayCompose: (prefill?: ComposePrefill) => void;
 }) {
-  // Saved to the account (follows the user across devices); the old
-  // localStorage copy is migrated on first load.
+  // Saved to the account (follows the user across devices).
   const [rawLayout, updateLayout] = useLayoutSettings(
     "outlook",
     DEFAULT_LAYOUT as unknown as Record<string, unknown>,
-    LEGACY_LAYOUT_KEY,
   );
   const layout = useMemo(
     () => sanitizeLayout(rawLayout as Partial<LayoutPrefs>),

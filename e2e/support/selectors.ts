@@ -41,13 +41,11 @@ export const TEST_IDS = {
 
   // Compose
   composeSendButton: "compose-send-button",
-  composeBody: "compose-body",
 
   // Reply
   replySendButton: "reply-send-button",
   replyComposer: "reply-composer",
 
   // API keys
-  apiKeyRow: "api-key-row",
   apiKeyRevealed: "api-key-revealed",
 } as const;

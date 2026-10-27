@@ -57,17 +57,6 @@ import { SearchBox } from "./Search";
 import { QuickSettings } from "./QuickSettings";
 import { Avatar, GmMenu, GmMenuItem, GmMenuSep, ShortcutsDialog } from "./ui";
 
-const RAIL_KEY = "saasmail.gmail.navCollapsed";
-
-function readRail(): boolean | null {
-  try {
-    const v = window.localStorage.getItem(RAIL_KEY);
-    return v === null ? null : v === "1";
-  } catch {
-    return null;
-  }
-}
-
 export function BrandMark({ size = 32 }: { size?: number }) {
   return (
     <span
@@ -462,9 +451,8 @@ export default function GmailShell({ children, onCompose }: ThemeShellProps) {
   const [stats, setStats] = useState<Stats | null>(null);
   const [inboxMounted, setInboxMounted] = useState(false);
   const view = useGmailView();
-  // Saved to the account; the old device-only key is the fallback.
-  const railPref = view.railCollapsed ?? readRail();
-  const rail = railPref ?? !isWide;
+  // Saved to the account; null means automatic by width.
+  const rail = view.railCollapsed ?? !isWide;
   const [railHover, setRailHover] = useState(false);
   const [drawer, setDrawer] = useState(false);
   const [accountSheet, setAccountSheet] = useState(false);

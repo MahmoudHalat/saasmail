@@ -1,11 +1,6 @@
 import { Link } from "react-router-dom";
 import { cn } from "@/lib/utils";
 
-interface FooterProps {
-  /** Kept for compatibility: the footer always sits on the navy chrome. */
-  variant?: "light" | "dark";
-}
-
 const link =
   "rounded-md px-1.5 py-0.5 text-chrome-dim transition-colors hover:bg-chrome-hover hover:text-chrome-fg";
 
@@ -13,7 +8,7 @@ const link =
  * One-row footer for public screens (auth, legal, unsubscribe). Drawn on
  * the navy chrome, under the paper or auth card.
  */
-export default function Footer(_props: FooterProps) {
+export default function Footer() {
   return (
     <footer className="w-full">
       <div
