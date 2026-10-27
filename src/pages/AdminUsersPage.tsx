@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Navigate } from "react-router-dom";
+import { Navigate, useSearchParams } from "react-router-dom";
 import {
   Check,
   Copy,
@@ -78,13 +78,24 @@ export default function AdminUsersPage() {
   const [users, setUsers] = useState<User[]>([]);
   const [invites, setInvites] = useState<Invite[]>([]);
   const [loading, setLoading] = useState(true);
+  const [inviteDialogOpen, setInviteDialogOpen] = useState(false);
   // `?invite=1` (the command palette's "Invite a teammate") opens the
-  // invite dialog straight away.
-  const [inviteDialogOpen, setInviteDialogOpen] = useState(
-    () =>
-      typeof window !== "undefined" &&
-      new URLSearchParams(window.location.search).get("invite") === "1",
-  );
+  // invite dialog, on arrival or while already on this page. The param is
+  // dropped once read, so asking again changes the URL and reopens it.
+  const [searchParams, setSearchParams] = useSearchParams();
+  const inviteParam = searchParams.get("invite") === "1";
+  useEffect(() => {
+    if (!inviteParam) return;
+    setInviteDialogOpen(true);
+    setSearchParams(
+      (prev) => {
+        const sp = new URLSearchParams(prev);
+        sp.delete("invite");
+        return sp;
+      },
+      { replace: true },
+    );
+  }, [inviteParam, setSearchParams]);
   const [inviteRole, setInviteRole] = useState<"admin" | "member">("member");
   const [inviteEmail, setInviteEmail] = useState("");
   const [inviteExpiry, setInviteExpiry] = useState("7");

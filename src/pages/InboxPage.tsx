@@ -69,7 +69,7 @@ import {
 } from "@/components/shell/nav";
 import { refreshMailCounts } from "@/components/shell/useMailCounts";
 import SnoozeDialog from "@/components/SnoozeDialog";
-import { shouldIgnoreKey } from "@/lib/shortcuts";
+import { goChord, shouldIgnoreKey } from "@/lib/shortcuts";
 import { shellStore } from "@/components/shell/shellStore";
 
 const keyOf = (it: { type: string; id: string }) => `${it.type}:${it.id}`;
@@ -245,9 +245,13 @@ export default function InboxPage() {
     },
     [setSearchParams],
   );
-  const [search, setSearch] = useState(
-    () => searchParams.get("q") ?? searchParams.get("search") ?? "",
-  );
+  const urlQuery = searchParams.get("q") ?? searchParams.get("search");
+  const [search, setSearch] = useState(() => urlQuery ?? "");
+  // A search linked from elsewhere (the command palette's "Search mail
+  // for …") while already on the inbox: adopt the new ?q=.
+  useEffect(() => {
+    if (urlQuery !== null) setSearch(urlQuery);
+  }, [urlQuery]);
   const [view, setView] = useState<InboxView>("list");
   // Sort is an account setting (follows the user to other devices).
   const [layoutSettings, setLayoutSettings] = useDefaultLayoutSettings();
@@ -1264,6 +1268,8 @@ export default function InboxPage() {
   const keyHandler = useRef<(e: KeyboardEvent) => void>(() => {});
   keyHandler.current = (e: KeyboardEvent) => {
     if (shouldIgnoreKey(e) || agentPlanOpen) return;
+    // A pending "g" chord owns this key (PortalShell navigates with it).
+    if (goChord.pending()) return;
     const shell = shellStore.get();
     if (shell.cmdk || shell.keys || snoozeTargets) return;
 
@@ -1573,6 +1579,7 @@ export default function InboxPage() {
             <div className="flex min-h-0 flex-1 overflow-hidden">
               <PeopleTable
                 items={items}
+                loading={peopleLoading}
                 onSelectPerson={(p) => {
                   setSelectedConversation(null);
                   setSelectedPerson(p);

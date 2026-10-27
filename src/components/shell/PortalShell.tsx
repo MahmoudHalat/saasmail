@@ -6,7 +6,7 @@ import CommandPalette from "./CommandPalette";
 import ShortcutsSheet from "./ShortcutsSheet";
 import { shellStore } from "./shellStore";
 import { MAIL_VIEWS, mailViewHref } from "./nav";
-import { shouldIgnoreKey } from "@/lib/shortcuts";
+import { goChord, shouldIgnoreKey } from "@/lib/shortcuts";
 
 /** Second key of a "g" chord → mail view id. */
 const GO_TO: Record<string, string> = {
@@ -81,25 +81,24 @@ export default function PortalShell({
   // "g" then a letter to jump to a mail view. The inbox adds its own
   // (j/k, e, s…) in InboxPage.
   useEffect(() => {
-    let chordUntil = 0;
     const onKey = (e: KeyboardEvent) => {
       if (shouldIgnoreKey(e)) return;
       const s = shellStore.get();
       if (s.cmdk || s.keys) return;
-      if (Date.now() < chordUntil) {
-        chordUntil = 0;
+      if (goChord.pending()) {
+        // The key after "g" is always the chord's, even when it isn't a
+        // view: consume it so the inbox's triage keys never see it.
+        goChord.end();
+        e.preventDefault();
         const view = MAIL_VIEWS.find((v) => v.id === GO_TO[e.key]);
-        if (view) {
-          e.preventDefault();
-          navigate(mailViewHref(view));
-        }
+        if (view) navigate(mailViewHref(view));
         return;
       }
       if (e.key === "?") {
         e.preventDefault();
         shellStore.set({ keys: true });
       } else if (e.key === "g") {
-        chordUntil = Date.now() + 1200;
+        goChord.start();
       } else if (e.key === "c") {
         e.preventDefault();
         onComposeRef.current();

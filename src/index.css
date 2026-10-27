@@ -547,7 +547,7 @@
   --chrome-edge: #082338;
 }
 
-/* Compact density: themes read this to tighten list rows. */
+/* Compact density: themes read this to tighten list and table rows. */
 :root[data-density="compact"] {
   --sm-row-pad: 4px;
 }

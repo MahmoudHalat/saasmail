@@ -1,7 +1,7 @@
 /**
- * Keyboard shortcuts for the default layout. One list feeds both the key
- * handlers' documentation (the "?" sheet) and the tooltip hints, so a
- * shortcut is never advertised in one place and missing from the other.
+ * Keyboard shortcuts for the default layout. SHORTCUT_GROUPS is what the
+ * "?" sheet lists; the handlers live in PortalShell (app-wide keys and "g"
+ * chords) and InboxPage (triage keys), so keep this list in step with them.
  */
 
 export interface ShortcutDef {
@@ -21,7 +21,9 @@ export const SHORTCUT_GROUPS: ShortcutGroup[] = [
       { keys: ["j"], label: "Next conversation" },
       { keys: ["k"], label: "Previous conversation" },
       { keys: ["Enter"], label: "Open conversation" },
+      { keys: ["o"], label: "Open conversation" },
       { keys: ["Esc"], label: "Close conversation / clear selection" },
+      { keys: ["u"], label: "Back to the list" },
       { keys: ["/"], label: "Search mail" },
       { keys: ["⌘", "K"], label: "Search people and run commands" },
     ],
@@ -50,15 +52,29 @@ export const SHORTCUT_GROUPS: ShortcutGroup[] = [
       { keys: ["g", "t"], label: "Sent" },
       { keys: ["g", "d"], label: "Drafts" },
       { keys: ["g", "a"], label: "Archive" },
+      { keys: ["g", "q"], label: "Sequenced" },
       { keys: ["?"], label: "Show this list" },
     ],
   },
 ];
 
-/** Shortcut letter shown in tooltips, e.g. hint("Archive", "E") → "Archive (E)". */
-export function hint(label: string, key?: string): string {
-  return key ? `${label} (${key})` : label;
-}
+/**
+ * The "g" go-to chord, shared by the shell (which owns it) and the inbox's
+ * triage keys. While a chord is pending, the next key belongs to the
+ * shell's navigation: the inbox ignores it whichever listener runs first.
+ */
+let goChordUntil = 0;
+export const goChord = {
+  start(): void {
+    goChordUntil = Date.now() + 1200;
+  },
+  pending(): boolean {
+    return Date.now() < goChordUntil;
+  },
+  end(): void {
+    goChordUntil = 0;
+  },
+};
 
 /**
  * True when a key event should be left alone by single-key shortcuts:

@@ -297,7 +297,10 @@ export default function PeopleTable({
             </p>
           </div>
         ) : (
-          <table className="pt-table">
+          <table
+            // Rows follow the density setting (--sm-row-pad), like the list.
+            className="pt-table [&_tbody_td]:py-[var(--sm-row-pad)]"
+          >
             <thead>
               <tr>
                 {selectedIds !== undefined && (
